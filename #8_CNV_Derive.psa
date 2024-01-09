@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Derive >
+  <Version value="7.18c" />
+  <ServerName value="Derive" />
+  <InstrumentPath value="C:\dev\projects\SEAN_Oceanography\2024\CON_calibration\8_2310.xmlcon" />
+  <InstrumentMatch value="0" />
+  <InputDir value="C:\dev\projects\SEAN_Oceanography\2024\temp" />
+  <InputFileArray size="8" GrowBy="-1" >
+    <ArrayItem index="0" value="1002_5_0189_02_C_F_a_M_L.cnv" />
+    <ArrayItem index="1" value="1002_5_0189_03_C_F_a_M_L.cnv" />
+    <ArrayItem index="2" value="1002_5_0189_04_C_F_a_M_L.cnv" />
+    <ArrayItem index="3" value="1002_5_0189_05_C_F_a_M_L.cnv" />
+    <ArrayItem index="4" value="1002_5_0189_06_C_F_a_M_L.cnv" />
+    <ArrayItem index="5" value="1002_5_0189_07_C_F_a_M_L.cnv" />
+    <ArrayItem index="6" value="1002_5_0189_08_C_F_a_M_L.cnv" />
+    <ArrayItem index="7" value="1002_5_0189_09_C_F_a_M_L.cnv" />
+  </InputFileArray>
+  <OutputDir value="C:\dev\projects\SEAN_Oceanography\2024\CNV_processed\temp" />
+  <NameAppend value="_D" />
+  <OutputFile value="" />
+  <LastProcessed value="0" />
+  <CalcArray Size="4" >
+    <CalcArrayItem index="0" CalcID="15" >
+      <Calc UnitID="54" Ordinal="0" >
+        <FullName value="Density [sigma-t, Kg/m^3 ]" />
+      </Calc>
+    </CalcArrayItem>
+    <CalcArrayItem index="1" CalcID="70" >
+      <Calc UnitID="49" Ordinal="0" >
+        <FullName value="Salinity [PSU]" />
+      </Calc>
+    </CalcArrayItem>
+    <CalcArrayItem index="2" CalcID="17" >
+      <Calc UnitID="31" Ordinal="0" >
+        <FullName value="Depth [salt water, m]" />
+        <Latitude value="58.500000" />
+      </Calc>
+    </CalcArrayItem>
+    <CalcArrayItem index="3" CalcID="55" >
+      <Calc UnitID="40" Ordinal="0" >
+        <FullName value="Oxygen, SBE 43 [ml/l]" />
+        <WindowSize value="2.000000" />
+        <ApplyHysteresisCorrection value="1" />
+        <ApplyTauCorrection value="1" />
+      </Calc>
+    </CalcArrayItem>
+  </CalcArray>
+  <MiscellaneousDataForCalculations >
+    <Latitude value="58.500000" />
+    <DescentRateAndAcceleration >
+      <WindowSize value="2.000000" />
+    </DescentRateAndAcceleration>
+    <Oxygen >
+      <WindowSize value="2.000000" />
+      <ApplyHysteresisCorrection value="1" />
+      <ApplyTauCorrection value="1" />
+    </Oxygen>
+    <AverageSoundVelocity >
+      <MinimumPressure value="20.000000" />
+      <MinimumSalinity value="20.000000" />
+      <PressureWindowSize value="20.000000" />
+      <TimeWindowSize value="60.000000" />
+    </AverageSoundVelocity>
+    <PlumeAnomaly >
+      <ThetaB value="0.000000" />
+      <SalinityB value="0.000000" />
+      <ThetaZSalinityZRatio value="0.000000" />
+      <ReferencePressure value="0.000000" />
+    </PlumeAnomaly>
+    <PotentialTempAnomaly >
+      <A0 value="0.000000" />
+      <A1 value="0.000000" />
+      <A1Multiplier value="0" />
+    </PotentialTempAnomaly>
+  </MiscellaneousDataForCalculations>
+</Derive>
