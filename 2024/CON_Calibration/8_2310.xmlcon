@@ -118,7 +118,7 @@
           <!-- Dark output -->
           <Vblank>0.0700</Vblank>
         </FluoroWetlabECO_AFL_FL_Sensor>
-	  </Sensor>
+      </Sensor>
       <Sensor index="5" SensorID="67" >
         <TurbidityMeter SensorID="67" >
           <SerialNumber>FLNTURT-7681</SerialNumber>
