@@ -1,0 +1,3 @@
+datcnv /i%1HEX_raw\*_7_*.hex /o%1plot\hex\temp /c%1con_calibration\%2 /p#7_HEX_to_CNV_for_Plotting_FIELD_2023.psa /s
+seaplot /i%1plot\hex\temp\*_7_*.cnv /o%1plot\hex /p#7_HEX_Plot_A_2023.psa /s
+seaplot /i%1plot\hex\temp\*_7_*.cnv /o%1plot\hex /p#7_HEX_Plot_B_2023.psa /s

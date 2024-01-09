@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Bin_Average >
+  <Version value="7.26.7.129" />
+  <ServerName value="Bin Average" />
+  <InputDir value="\\nps\akrdfs\GLBA\Science\Data\Oceanography\Data\TEST\CNV_Processed\temp" />
+  <InputFileArray size="0" GrowBy="-1" />
+  <OutputDir value="\\nps\akrdfs\GLBA\Science\Data\Oceanography\Data\TEST\CNV_processed" />
+  <NameAppend value="_B" />
+  <OutputFile value="" />
+  <LastProcessed value="0" />
+  <BinType value="2" />
+  <BinSize value="1.000000" />
+  <IncludeNumberScans value="0" />
+  <ExcludeMarkedBad value="1" />
+  <ScansToSkip value="0" />
+  <ScansToOmit value="0" />
+  <MinScansPerBin value="1" />
+  <MaxScansPerBin value="2147483647" />
+  <CastToProcess value="1" high="2" low="0" initialValue="0" />
+  <IncludeSurfaceBin value="1" />
+  <SurfaceBinMinVal value="0.200000" />
+  <SurfaceBinMaxVal value="0.800000" />
+  <SurfaceBinVal value="0.000000" />
+</Bin_Average>

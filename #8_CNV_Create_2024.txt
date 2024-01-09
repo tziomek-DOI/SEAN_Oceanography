@@ -1,0 +1,9 @@
+datcnv /i%1hex_raw\*_8_*.hex /o%1CNV_Processed\temp /c%1CON_calibration\%2 /p#8_CNV_Convert_2024.psa /s /a_C
+Filter /i%1CNV_Processed\temp\*_8_*_C.cnv /o%1CNV_Processed\temp /p#8_CNV_Filter_2024.psa /s /a_F
+Alignctd /i%1CNV_Processed\temp\*_8_*_F.cnv /o%1CNV_Processed\temp /p#8_CNV_AlignCTD_2024.psa /s /a_A
+CellTM /i%1CNV_Processed\temp\*_8_*_A.cnv /o%1CNV_Processed\temp /p#8_CNV_CellTM_2024.psa /s /a_M
+Loopedit /i%1CNV_Processed\temp\*_8_*_M.cnv /o%1CNV_Processed\temp /p#8_CNV_LoopEdit_2024.psa /s /a_L
+Derive /i%1CNV_Processed\temp\*_8_*_L.cnv /o%1CNV_Processed\temp /c%1CON_calibration\%2 /p#8_CNV_Derive_2024.psa /s /a_D
+Binavg /i%1CNV_Processed\temp\*_8_*_D.cnv /o%1CNV_Processed /p#8_CNV_Binavg_2024.psa /s /a_B
+Seaplot /i%1CNV_Processed\*_8_*.cnv /o%1plot\cnv /p#8_CNV_Plot_A_2024.psa /s
+Seaplot /i%1CNV_Processed\*_8_*.cnv /o%1plot\cnv /p#8_CNV_Plot_B_2024.psa /s

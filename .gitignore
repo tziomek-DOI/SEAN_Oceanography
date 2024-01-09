@@ -1,0 +1,17 @@
+# ignore ALL .log files
+#*.log
+
+# ignore ALL files in these directories:
+old/
+testarea/
+2023/Plot/
+2023/CNV_processed/
+2023/HEX_raw
+2024/Plot/
+2024/CNV_processed/
+2024/HEX_raw
+2024/SBE_Pre_Cruise_Files_19-8228
+2024/Cruise_Notes
+2024/Certificate
+2024/Log_Sheet
+2024/CON_Calibration/8228 .cal

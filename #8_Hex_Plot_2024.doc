@@ -1,0 +1,11 @@
+----------------------------------------------------------
+Generate QA plots of oceanographic hex data files on network K: drive.
+This only works properly when using CTD #8: Sea-Bird 19plus V2 s/n 8228.
+It requires the CTD to be in its configuration of 2024 - any new sensors
+or other reconfigurations are not recognized until reprogramming is done.
+
+Raw HEX data files must be in K:\Data\Oceanography\Data\yyyy\HEX_raw\
+A current CON file must be in K:\Data\Oceanography\Data\yyyy\CON_calibration\
+Plot images are placed in K:\Data\Oceanography\Data\yyyy\Plot\Hex\
+----------------------------------------------------------
+
