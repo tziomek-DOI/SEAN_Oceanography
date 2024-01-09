@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Loop_Edit >
+  <Version value="7.18c" />
+  <ServerName value="Loop Edit" />
+  <InputDir value="C:\dev\projects\SEAN_Oceanography\2024\CNV_processed\temp" />
+  <InputFileArray size="0" GrowBy="-1" >
+  </InputFileArray>
+  <OutputDir value="C:\dev\projects\SEAN_Oceanography\2024\CNV_processed\temp" />
+  <NameAppend value="_L" />
+  <OutputFile value="" />
+  <LastProcessed value="0" />
+  <MinVelocityType value="0" high="1" low="0" initialValue="0" />
+  <MinCTD_Velocity value="0.100000" />
+  <TimeWindowSize value="300.000000" />
+  <PercentMeanSpeed value="20.000000" />
+  <ExcludeMarkedBad value="1" />
+  <RemoveSurfaceSoak value="0" />
+  <UseDeckPressure value="1" />
+  <SurfaceSoakDepth value="10.000000" />
+  <SurfaceSoakDepthMin value="5.000000" />
+  <SurfaceSoakDepthMax value="20.000000" />
+</Loop_Edit>
