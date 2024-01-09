@@ -1,3 +1,0 @@
-datcnv /i%1hex_raw\*_8_*.hex /o%1plot\hex\temp /c%1con_calibration\%2 /p#8_HEX_to_CNV_for_Plotting_2024.psa /s
-seaplot /i%1plot\hex\temp\*_8_*.cnv /o%1plot\hex /p#8_HEX_Plot_A_2024.psa /s
-seaplot /i%1plot\hex\temp\*_8_*.cnv /o%1plot\hex /p#8_HEX_Plot_B_2024.psa /s
