@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "CNV_converter_for_ODV": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\Temp\\dev\\DM\\OC\\cnv_source C:\\Temp\\dev\\DM\\OC\\cnv_odv"
+    }
+  }
+}
