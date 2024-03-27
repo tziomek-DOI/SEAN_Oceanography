@@ -11,7 +11,8 @@ set /p sb-cal=Enter calibration CON file name:
 
 rem set environment ----------------------------------------------------
 set path=%path%;C:\Program Files\sea-bird\sbedataprocessing-win32
-set sb-base-dir=\\nps.doi.net\akrdfs\GLBA\Science\Data\Oceanography\Data\%sb-year%\
+REM set sb-base-dir=\\nps.doi.net\akrdfs\GLBA\Science\Data\Oceanography\Data\%sb-year%\
+set sb-base-dir=C:\dev\projects\SEAN_Oceanography\%sb-year%\
 
 rem invoke SBEBatch to make CNV from HEX and then plot the CNVs --------
 sbebatch #7_Hex_Plot_2023.txt %sb-base-dir% %sb-cal%
