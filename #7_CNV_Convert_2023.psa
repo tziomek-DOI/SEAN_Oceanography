@@ -2,11 +2,11 @@
 <Data_Conversion >
   <Version value="7.26.7.129" />
   <ServerName value="Data Conversion" />
-  <InstrumentPath value="K:\SEAN_Data\Staging\OC\OC_A\992\7_2210.xmlcon" />
+  <InstrumentPath value="K:\SEAN_Data\Staging\OC\OC_A\995\7_2210.xmlcon" />
   <InstrumentMatch value="0" />
-  <InputDir value="K:\SEAN_Data\Staging\OC\OC_A\992" />
+  <InputDir value="K:\SEAN_Data\Staging\OC\OC_A\995" />
   <InputFileArray size="0" GrowBy="-1" />
-  <OutputDir value="K:\SEAN_Data\Staging\OC\OC_A\992" />
+  <OutputDir value="K:\SEAN_Data\Staging\OC\OC_A\995" />
   <NameAppend value="_C" />
   <OutputFile value="" />
   <LastProcessed value="0" />
