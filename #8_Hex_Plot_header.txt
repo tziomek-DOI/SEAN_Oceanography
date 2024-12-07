@@ -4,8 +4,8 @@ This only works properly when using CTD #8: Sea-Bird 19plus V2 s/n 8228.
 It requires the CTD to be in its configuration of 2024 - any new sensors
 or other reconfigurations are not recognized until reprogramming is done.
 
-Raw HEX data files must be in C:\dev\projects\SEAN_Oceanography\yyyy\HEX_raw\
-A current CON file must be in C:\dev\projects\SEAN_Oceanography\yyyy\CON_calibration\
-Plot images are placed in C:\dev\projects\SEAN_Oceanography\yyyy\Plot\Hex\
+Raw HEX data files must be in C:\Users\<username>\OneDrive - DOI\Oceanography\File_Processing\yyyy\HEX_raw\
+A current CON file must be in C:\Users\<username>\OneDrive - DOI\Oceanography\File_Processing\yyyy\CON_calibration\
+Plot images are placed in C:\Users\<username>\OneDrive - DOI\Oceanography\File_Processing\yyyy\Plot\Hex\
 -------------------------------------------------------------------------------------
 
