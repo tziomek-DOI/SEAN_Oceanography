@@ -1,4 +1,6 @@
-﻿<# 
+﻿Write-Host "Starting the cnv_converter_for_ODV.ps1 script..."
+
+<# 
 .SYNOPSIS
 
 Modify Sea-Bird CNV files to make them ODV-compatible.
@@ -217,15 +219,16 @@ if ($args.Count -ne 2) {
     Write-Host "ERROR! Must pass the CNV source and output directories to the script."
     $result = -2
 } else {
-#try {
-    #Write-Host "args:"
+try {
+    Write-Host "args:"
     Write-Host "Source directory: $($args[0])"
     Write-Host "Output directory: $($args[1])`n"
 
     $converter = [Converter]::new($args[0], $args[1])
     $result = $converter.UpdateCNVFiles()
-#} catch {
-#    Write-Host $_.Exception.Message
+} catch {
+    Write-Host $_.Exception.Message
+    }
 }
 
 Write-Host "`nProgram completed with code $result (0 indicates success)."
