@@ -52,7 +52,7 @@ class HexFileMetadata {
         $this._survey_metadata = ""
         $this._station_metadata = ""
         $this._yyMM = ""
-        $this._is_production = $false
+        $this._is_production = $true
 
         if (Test-Path $hex_file_dir) {
             $this._hex_file_dir = Convert-Path $hex_file_dir
@@ -208,7 +208,7 @@ class HexFileMetadata {
      #>
     [void] GetYearMonthFromFilename() {
 
-        # Get the first .hex file in the folder
+        # Get the first .hex file in the folder. If none are found, the variable will be empty. No error is generated.
         $firstHexFile = Get-ChildItem -Path $this._hex_file_dir -Filter '*.hex' | Sort-Object Name | Select-Object -First 1
 
         if (-not $firstHexFile) {
