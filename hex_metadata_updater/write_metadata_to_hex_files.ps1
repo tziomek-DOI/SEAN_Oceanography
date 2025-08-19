@@ -52,7 +52,7 @@ class HexFileMetadata {
         $this._survey_metadata = ""
         $this._station_metadata = ""
         $this._yyMM = ""
-        $this._is_production = $true
+        $this._is_production = $false
 
         if (Test-Path $hex_file_dir) {
             $this._hex_file_dir = Convert-Path $hex_file_dir
@@ -116,7 +116,8 @@ class HexFileMetadata {
         # Export the merged data to a new CSV file for dev/debug purposes.
         # TODO: Remove this in production.
         if (-not $this._is_production) {
-            $mergedData | Export-Csv -Path "C:\Users\tziomek\OneDrive - DOI\dev\projects\SEAN_Oceanography\scripts\hex_metadata_updater\data\glba_oc_merged_survey_data.csv" -NoTypeInformation
+            $dataDir = Split-Path $this._station_metadata
+            $mergedData | Export-Csv -Path "$dataDir\glba_oc_merged_survey_data.csv" -NoTypeInformation
         }
     } # end MergeCsvData
 
@@ -129,6 +130,7 @@ class HexFileMetadata {
         $HexFolder = $this._hex_file_dir
         $records = @()
         $records = $this._merged_data
+        $tempRow = $null
 
         if (-not $records -or $records.Count -eq 0) {
             Log-Message "error" "No records found in the merged data."
@@ -138,6 +140,7 @@ class HexFileMetadata {
         Log-Message "info" "Processing $($records.Count) records..."
 
         foreach ($row in $records) {
+            $tempRow = $row # used for logging error info
             try {
                 # Parse date and extract YYMM
                 # Note that this only works if the .hex files were downloaded during the same month as the survey was conducted.
@@ -172,6 +175,16 @@ class HexFileMetadata {
                     $dateGMT = [datetime]::Parse($row.'Date GMT')
                     $timeGMT = [datetime]::Parse($row.'Time GMT') 
 
+                    # Need to convert the local date/time variables into UTC:
+                    $dateUTC = $null
+                    $timeUTC = $null
+
+                    if (-not ([HexFileMetadata]::ConvertLocalDateTimeToUTC($dateGMT, $timeGMT, [ref]$dateUTC, [ref]$timeUTC))) {
+                        Log-Message "error" "Failed to convert '$($dateGMT)' and/or '$($timeGMT)' to UTC time."
+                    } else {
+                        Log-Message "info" "UTC date = $dateUTC, time = $timeUTC"
+                    }
+
                     $updatedFields = @{
                         "Vessel" = $row.Vessel
                         "CTD#" = $ctd
@@ -181,8 +194,12 @@ class HexFileMetadata {
                         "Station" = $station
                         "Latitude" = $row.Latitude
                         "Longitude" = $row.Longitude
-                        "Date GMT" = $dateGMT.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
-                        "Time GMT" = $timeGMT.ToString("HH:mm") # Need to reformat, currently '8:24'
+                        #"Date GMT" = $dateGMT.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
+                        #"Time GMT" = $timeGMT.ToString("HH:mm") # Need to reformat, currently '8:24'
+                        #"Date GMT" = $dateUTC.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
+                        #"Time GMT" = $timeUTC.ToString("HH:mm") # Need to reformat, currently '8:24'
+                        "Date GMT" = $dateUTC
+                        "Time GMT" = $timeUTC
                         "Fathometer depth" = $row.'Fathometer Depth'
                         "Cast target depth" = $row.'Target Depth'
                         "Comments" = $row.Comments
@@ -198,6 +215,7 @@ class HexFileMetadata {
                 }
             } catch {
                 Log-Message "error" "Error processing row: $($_.Exception.Message)"
+                Log-Message "error" "Current row: $tempRow"
             }
 
         } # end foreach
@@ -328,6 +346,65 @@ class HexFileMetadata {
             Log-Message "error" "In WriteHexFileMetadata, external catch block: $($_.Exception.Message)"
         }
 
+        return $retval
+    }
+
+
+    # ConvertLocalDateTimeToUTC
+    # Does what it says, and also converts back to local time as an extra check.
+    #function ConvertLocalDateTimeToUTC([string] $dateLocal, [string] $timeLocal) {
+    static [bool] ConvertLocalDateTimeToUTC(
+        [string] $dateLocal, 
+        [string] $timeLocal,
+        [ref] $dateUTC,
+        [ref] $timeUTC
+    ) {
+
+        [bool]$retval = $false # return variable to indicate success/failure
+        [string]$localDTcombined = ""
+
+        try {
+            # Time zone object for Alaska (handles DST automatically)
+            $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Alaskan Standard Time")
+
+            # Combine into one DateTime string and parse
+            $localDTcombined = "$((Get-Date $dateLocal).ToString("MM/dd/yyyy")) $((Get-Date $timeLocal).ToString("HH:mm"))"
+            Log-Message "info" "Combined local time: $($localDTCombined)."
+            $localDateTime = [datetime]::ParseExact($localDTcombined, "MM/dd/yyyy HH:mm", $null)
+            <#
+            $localDateTime = [datetime]::ParseExact(
+                "$dateLocalDateOnly $timeLocal",
+                "MM/dd/yyyy HH:mm",
+                $null
+            )
+            #>
+
+            # Treat as Alaska local time
+            $localDateTime = [System.TimeZoneInfo]::ConvertTime($localDateTime, $tz)
+
+            # Convert to UTC
+            $utcDateTime = [System.TimeZoneInfo]::ConvertTimeToUtc($localDateTime, $tz)
+
+            # Split into date + time variables, and store them in the reference parameters:
+            $dateUTC.Value = $utcDateTime.ToString("MM/dd/yyyy")
+            $timeUTC.Value = $utcDateTime.ToString("HH:mm")
+
+            Write-Host "Local Alaska time: $dateLocal $timeLocal"
+            Write-Host "Converted UTC time: $dateUTC $timeUTC"
+
+            # --- Round-trip check: UTC → Alaska ---
+            $backToLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($utcDateTime, $tz)
+
+            $retval = $true
+
+        } catch {
+            #Log-Message "error" "Error in WriteHexFileMetadata:`n$($_.Exception.Message)"
+            Log-Message "error" "Error in ConvertLocalDateTimeToUTC:`n$($_.Exception.Message)"
+            $msg = "Failed to convert the date '$($dateLocal)'/ time '$($timeLocal)', combined into '$($localDTcombined)' correctly (or at all)."
+            Log-Message "error" $msg
+            throw $msg
+        }
+        Write-Host "Round-trip back to Alaska local: $($backToLocal.ToString('MM/dd/yyyy HH:mm'))"
         return $retval
     }
 

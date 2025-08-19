@@ -18,17 +18,25 @@ rem For ease, a variable called %username% is set here. Change this value to the
 set /p username="Enter username (for OneDrive path): " 
 
 rem invoke write_metadata_to_hex_files.ps1
-set "script=C:\Users\%username%\OneDrive - DOI\dev\projects\SEAN_Oceanography\scripts\hex_metadata_updater\write_metadata_to_hex_files.ps1"
-set "hex_files_dir=C:\Users\%username%\OneDrive - DOI\dev\projects\SEAN_Oceanography\scripts\hex_metadata_updater\data\hex_files\"
-set "survey_csv=C:\Users\%username%\OneDrive - DOI\dev\projects\SEAN_Oceanography\scripts\hex_metadata_updater\data\glba_oc_survey_metadata.csv"
-set "station_csv=C:\Users\%username%\OneDrive - DOI\dev\projects\SEAN_Oceanography\scripts\hex_metadata_updater\data\glba_oc_survey_station_data.csv"
+
+rem Set this to the ps1 script location and filename:
+set "script=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\write_metadata_to_hex_files.ps1"
+
+rem Set this to the directory containing the raw .hex files from the CTD (after they have been renamed):
+set "hex_files_dir=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\data\hex_files\"
+
+rem Set this to the path + filename of the 'survey' CSV file:
+set "survey_csv=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\data\glba_oc_survey_metadata.csv"
+
+rem Set this to the path + filename of the 'station' CSV file:
+set "station_csv=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\data\glba_oc_survey_station_data.csv"
 
 rem echo Preparing to run the PowerShell script...
 echo Preparing to run the script for user '%username%'. Settings:
 echo PowerShell script location: %script%
-echo Original .HEX filed directory: %hex_files_dir%
-echo Input directory: %survey_csv%
-echo Output directory: %station_csv%
+echo Original .HEX files directory: %hex_files_dir%
+echo Survey CSV file: %survey_csv%
+echo Station CSV file: %station_csv%
 
 rem pause
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
