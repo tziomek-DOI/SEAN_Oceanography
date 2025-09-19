@@ -1,0 +1,26 @@
+QFormLayout > QLabel {
+	color: #FFFFFF;
+}
+
+QPushButton {
+    background-color: #4a90e2;  /* Blue button background */
+    color: #ffffff;  /* White button text */
+    border: 1px solid #357abd;  /* Darker blue border */
+    border-radius: 4px;
+    padding: 6px;
+    min-width: 100px;
+}
+
+QPushButton:hover {
+    background-color: #5aa0f2;  /* Lighter blue on hover */
+}
+
+QPushButton:pressed {
+    background-color: #3a80d2;  /* Darker blue when pressed */
+}
+
+QComboBox:focus {
+	border: 2px solid #ffcc00; /* Bright yellow border on focus, try 3px #ff0000 as alternative */
+	background-color: #00ff00; /* Light yellow bg #ffffe0 on focus, or try green #00ff00. */
+	color: #000000;	/* black text */
+}
