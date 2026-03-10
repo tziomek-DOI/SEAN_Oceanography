@@ -24,3 +24,50 @@ QComboBox:focus {
 	background-color: #00ff00; /* Light yellow bg #ffffe0 on focus, or try green #00ff00. */
 	color: #000000;	/* black text */
 }
+
+/* Simplistic style that visually separates the menu from the rest of the app. */
+QMainWindow {
+    /* border-top: 1px solid #b0b0b0; */
+    border-top: 1px solid #00ff00;
+    border-bottom: 1px solid #00ff00;
+}
+
+/* These QMenuBar items can tweak the styling if desired.
+   Currently - disabled. Uncomment this block to use and configure (move the '* /' characters
+   from the end of the QMenuBar sections to right here ->> */
+QMenuBar {
+    background-color: #2b2b2b;
+    color: #dddddd;
+    border-bottom: 1px solid #00ff00; /* original was #3c3c3c */
+}
+
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 10px;
+}
+
+QMenuBar::item:selected {
+    background: #3d4d63;
+}
+
+QMenu {
+    background-color: #2b2b2b;
+    color: #dddddd;
+    border: 1px solid #444444;
+}
+
+QMenu::item {
+    padding: 5px 25px 5px 20px;
+}
+
+QMenu::item:selected {
+    background-color: #3d4d63;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: #444444;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+/* end of QMenu and QMenuBar styling. */
