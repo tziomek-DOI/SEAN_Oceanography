@@ -3,8 +3,8 @@
 setlocal enabledelayedexpansion
 
 :: Set up script and log file
-set "SCRIPT=%~dp0gps_app_v0.4.py"
-set "LOGFILE=%~dp0gps_app_log.txt"
+set "SCRIPT=%~dp0oc_station_metadata_form.py"
+set "LOGFILE=%~dp0oc_station_metadata_form.log"
 
 echo === Script started at %DATE% %TIME% === >> "%LOGFILE%"
 
@@ -86,10 +86,10 @@ echo Running gps_app.py...
 echo Running gps_app.py... >> "%LOGFILE%"
 
 :: Use a temporary file to capture output
-set "TMPLOG=%TEMP%\gps_app_output.tmp"
+set "TMPLOG=%TEMP%\oc_station_metadata_form_output.tmp"
 
 :: Run the script synchronously and capture output
-python "%SCRIPT%" > "%TEMP%\gps_app_output.tmp" 2>&1
+python "%SCRIPT%" > "%TEMP%\oc_station_metadata_form_output.tmp" 2>&1
 set "EXITCODE=%ERRORLEVEL%"
 
 type "%TMPLOG%" >> "%LOGFILE%"
@@ -98,7 +98,7 @@ type "%TMPLOG%" >> "%LOGFILE%"
 if %EXITCODE% NEQ 0 (
     echo Error occurred while running %SCRIPT%.
     echo Error occurred while running %SCRIPT%. >> "%LOGFILE%"
-    type "%TEMP%\gps_app_output.tmp"
+    type "%TEMP%\oc_station_metadata_form_output.tmp"
     echo Exit code: %EXITCODE% >> "%LOGFILE%"
     pause
 ) else (
