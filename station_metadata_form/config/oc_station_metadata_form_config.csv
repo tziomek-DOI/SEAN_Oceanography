@@ -11,7 +11,7 @@ latitude_max,60.0
 # Set number of decimal places (precision):
 latitude_decimal_places,6
 # Longitude field validation. Must be a decimal value:
-longitude_min,-136.0
+longitude_min,-137.0
 longitude_max,-134.0
 # Set number of decimal places (precision):
 longitude_decimal_places,6
@@ -20,7 +20,7 @@ cruise_max_length,20
 # Vessel name field - set max number of characters (24 matches OC database field size)
 vessel_max_length,24
 # Observer field - set max number of characters (50 matches OC database field size)
-observer_max_length,50
+observer_max_length,500
 # Populate the 'Stations' dropdown. 25 means 'less than 25', so max value is actually 24
 stations_max_value,25
 # These max lengths match the OC database field sizes:

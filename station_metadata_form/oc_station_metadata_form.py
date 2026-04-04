@@ -323,7 +323,7 @@ class GPSApp(QMainWindow):
         self.cast_edit.setValidator(cast_validator)
         self.cast_edit.setToolTip("Enter value between 0-1XX for cast number.")
         self.station_combo = QComboBox()
-        self.station_combo.addItems(["{:02d}".format(i) for i in range(1, 25)])  # Populates dropdown with 01-24
+        self.station_combo.addItems(["{:02d}".format(i) for i in range(0, 25)])  # Populates dropdown with 00-24
 
         depth_validator = QIntValidator(1, 999)
         self.fathometer_edit = QLineEdit()
@@ -347,8 +347,8 @@ class GPSApp(QMainWindow):
         #self.latitude_help_btn.clicked.connect(self.show_widget_help)
         #self.latitude_help_btn = self.create_help_button("Enter latitude in decimal degrees.\nExample: 58.3019")
         self.longitude_edit = QLineEdit()
-        self.longitude_min = self.config.get('longitude_min', -136.0)
-        self.longitude_max = self.config.get('longitude_max', -135.0)
+        self.longitude_min = self.config.get('longitude_min', -137.0)
+        self.longitude_max = self.config.get('longitude_max', -134.0)
         self.longitude_precision = self.config.get('longitude_decimal_places', 6)
         lon_validator = QDoubleValidator(self.longitude_min, self.longitude_max, self.longitude_precision)
         lon_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
