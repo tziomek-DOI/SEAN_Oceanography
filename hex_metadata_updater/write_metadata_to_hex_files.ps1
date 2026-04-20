@@ -1,21 +1,26 @@
 ﻿<# 
 .SYNOPSIS
 
-Updates the CTD downloaded .hex files with metadata from each station, via the AGOL CSV files from Survey123.
+Updates the CTD downloaded .hex files with metadata from each station, via the CSV file from the 'oc_station_metadata_form' app.
 
-DESCRIPTION
+.DESCRIPTION
 
-- Reads the survey and station metadata CSV files.
-- Matches the survey and station records.
+- Reads the survey and station metadata CSV file.
 - Finds the matching .hex file, updates the .hex file metadata, and writes the updated content to a new file, preserving the original.
+
+.VERSION
+1.1
+
+.LASTMODIFIED
+20-APR-2026
 
 .EXAMPLE
 
 # Assumes the script is in the current/working directory.
 
-PS c:\> .\write_metadata_to_hex_files.ps1 <hex_dir> <survey_csv_file> <station_csv_file>
+PS c:\> .\write_metadata_to_hex_files.ps1 <hex_dir> <metadata_csv_file>
 
-PS c:\> .\write_metadata_to_hex_files.ps1 c:\oc\hex_files\ c:\oc\csv_files\glba_oc_survey_metadata.csv c:\oc\csv_files\glba_oc_station_metadata.csv
+PS c:\> .\write_metadata_to_hex_files.ps1 c:\oc\hex_files\ c:\oc\csv_files\oc_station_metadata.csv
 
 .INPUTS
 
@@ -23,10 +28,7 @@ PS c:\> .\write_metadata_to_hex_files.ps1 c:\oc\hex_files\ c:\oc\csv_files\glba_
     The directory containing the source .HEX files.
 
 .PARAMETER 
-    The full path and filename of the CSV file containing the survey metadata.
-
-.PARAMETER
-    The full path and filename of the CSV file containing the station metadata.
+    The full path and filename of the CSV file containing the survey and station metadata.
 
 .OUTPUTS
     Return a code = 0 if program ran successfully. Any value other than 0 means an error occurred.
@@ -38,21 +40,23 @@ PS c:\> .\write_metadata_to_hex_files.ps1 c:\oc\hex_files\ c:\oc\csv_files\glba_
 
 class HexFileMetadata {
     [string] $_hex_file_dir
-    [string] $_survey_metadata
-    [string] $_station_metadata
+    [string] $_metadata_csv
     [object[]] $_merged_data
     [string] $_yyMM
     [bool] $_is_production
+    [int] $_matched_recs_count
+    [int] $_unmatched_recs_count
 
     # Constructor:
-    HexFileMetadata([string]$hex_file_dir, [string]$survey_metadata_csv, [string]$station_metadata_csv) {
+    HexFileMetadata([string]$hex_file_dir, [string]$metadata_csv) {
 
         $this._merged_data = @()
         $this._hex_file_dir = ""
-        $this._survey_metadata = ""
-        $this._station_metadata = ""
+        $this._metadata_csv = ""
         $this._yyMM = ""
         $this._is_production = $false
+        $this._matched_recs_count = 0
+        $this._unmatched_recs_count = 0
 
         if (Test-Path $hex_file_dir) {
             $this._hex_file_dir = Convert-Path $hex_file_dir
@@ -60,66 +64,111 @@ class HexFileMetadata {
             throw "Invalid .hex files directory: '$($hex_file_dir)'."
         }
 
-        if (Test-Path $survey_metadata_csv) {
-            $this._survey_metadata = Convert-Path $survey_metadata_csv
+        if (Test-Path $metadata_csv) {
+            $this._metadata_csv = Convert-Path $metadata_csv
         } else {
-            throw "Survey metadata file Not Found: '$($survey_metadata_csv)'."
-        }
-
-        if (Test-Path $station_metadata_csv) {
-            $this._station_metadata = Convert-Path $station_metadata_csv
-        } else {
-            throw "Station metadata file not found: '$station_metadata_csv'."
+            throw "Metadata CSV file Not Found: '$($metadata_csv)'."
         }
         
     } # end CTOR HexFileMetadata
 
-    <# function MergeCsvData
-     # Finds the matching records from the survey and station CSV files, and writes a new record containing select fields from the two input records.
-     # The merged data is saved in an array class variable, and used later.
-     #>
-    [void] MergeCsvData() {
+    [string] NormalizeString([string]$value) {
+        if ($null -eq $value) { return $null }
+        return $value.Trim()
+    }
 
-        $stationData = Import-Csv -Path $this._station_metadata
-        $surveyData = Import-Csv -Path $this._survey_metadata
+    [PSCustomObject] NormalizeRow([PSCustomObject]$row) {
 
-        $mergedData = foreach ($child in $stationData) {
-            $parent = $surveyData | Where-Object { $_.GlobalID -eq $child.ParentGlobalID }
-            if ($parent) {
-                Log-Message "info" "Found match for parent '$($parent.GlobalID)'..."
-
-                [PSCustomObject]@{
-                    Cruise              = $parent.Cruise
-                    Vessel              = $parent.Vessel
-                    'Other Vessel'      = $parent.'Other Vessel'
-                    Observer            = $parent.Observers
-                    'CTD#'              = $parent.'CTD Number'
-                    'Dump#'             = $parent.data_dump_number
-                    'Cast#'             = $child."Cast Number"
-                    Station             = $child.Station
-                    Latitude            = $child.Latitude
-                    Longitude           = $child.Longitude
-                    StationObjectID     = $child.ObjectID
-                    GlobalID            = $parent.GlobalID # can remove this, just checking
-                    ChildGlobalID       = $child.ParentGlobalID # can remove this, just checking
-                    'Date GMT'          = $child.Date
-                    'Time GMT'          = $child.Time
-                    'Fathometer Depth'  = $child.'Fathometer Depth'
-                    'Target Depth'      = $child.'Target Depth'
-                    Comments            = $child.Comments
-                }
+        foreach ($prop in $row.PSObject.Properties) {
+            if ($prop.Value -is [string]) {
+                $prop.Value = $this.NormalizeString($prop.Value)
             }
         }
 
-        $this._merged_data = $mergedData
+        $row.ctd = [int]$row.ctd
+        $row.dump = [int]$row.dump
+        $row.cast = [int]$row.cast
+        $row.station = "{0:D2}" -f [int]$row.station
 
-        # Export the merged data to a new CSV file for dev/debug purposes.
-        # TODO: Remove this in production.
-        if (-not $this._is_production) {
-            $dataDir = Split-Path $this._station_metadata
-            $mergedData | Export-Csv -Path "$dataDir\glba_oc_merged_survey_data.csv" -NoTypeInformation
+        $row.decimalLatitude = [double]$row.decimalLatitude
+        $row.decimalLongitude = [double]$row.decimalLongitude
+
+        return $row
+    }
+
+    [void] ValidateRow([pscustomobject]$row, [int]$index) {
+
+        if (-not $row.eventDate) {
+            throw "Row $($index): Missing eventDate"
         }
-    } # end MergeCsvData
+
+        try {
+            [datetime]::Parse($row.eventDate) | Out-Null
+        } catch {
+            throw "Row $index (Station $($row.station), Cast $($row.cast)): Invalid eventDate '$($row.eventDate)'"
+        }
+
+        if ($row.decimalLatitude -lt -90 -or $row.decimalLatitude -gt 90) {
+            throw "Row $index (Station $($row.station), Cast $($row.cast)): Invalid latitude '$($row.decimalLatitude)'"
+        }
+
+        if ($row.decimalLongitude -lt -180 -or $row.decimalLongitude -gt 180) {
+            throw "Row $index (Station $($row.station), Cast $($row.cast)): Invalid longitude '$($row.decimalLongitude)'"
+        }
+
+        if (-not $row.station) {
+            throw "Row $index (Timestamp $($row.eventDate)): Missing station"
+        }
+    }
+
+    <# function LoadCsvData
+     # Loads the data collected and exported into the metadata CSV file.
+     # The loaded data is saved in an array class variable, and used later.
+     #>
+    [void] LoadCsvData() {
+
+        $csvData = Import-Csv -Path $this._metadata_csv
+
+        $processedData = @()
+
+        for ($i = 0; $i -lt $csvData.Count; $i++) {
+
+            $row = $this.NormalizeRow($csvData[$i])
+            $this.ValidateRow($row, $i)
+
+            # Use datetimeoffset to prevent possible implicit conversion to local time:
+            #$dt = [datetime]::Parse($row.eventDate)
+            $dto = [datetimeoffset]::Parse($row.eventDate)
+            $dt = $dto.UtcDateTime
+
+            $processedData += [PSCustomObject]@{
+                Cruise              = $row.cruise
+                Vessel              = $row.vessel
+                Observer            = $row.observers
+                'CTD#'              = $row.ctd
+                'Dump#'             = $row.dump
+                'Cast#'             = $row.cast
+                Station             = $row.station
+                Latitude            = $row.decimalLatitude
+                Longitude           = $row.decimalLongitude
+                'Date GMT'          = $dt.ToString("MM/dd/yyyy")
+                'Time GMT'          = $dt.ToString("HH:mm")
+                'Fathometer Depth'  = $row.fathometer_depth
+                'Target Depth'      = $row.target_depth
+                Comments            = $row.fieldNotes
+            }
+        }
+
+        $duplicates = $processedData |
+            Group-Object Station, 'Cast#' |
+            Where-Object { $_.Count -gt 1 }
+
+        if ($duplicates) {
+            throw "Duplicate station/cast combinations detected. Fix your CSV before proceeding."
+        }
+
+        $this._merged_data = $processedData
+    }
 
     <# function MatchHexFiles
      # Uses the metadata from the merged data to locate the associated .hex files.
@@ -160,30 +209,39 @@ class HexFileMetadata {
                 $cast   = "{0:D3}" -f [int]$row.'Cast#'
                 $station = "{0:D2}" -f [int]$row.'Station'
 
-                $expectedFilename = "$($this._yyMM)_$($ctd)_$($dump)_$($cast)_$($station).hex"
+                #$expectedFilename = "$($this._yyMM)_$($ctd)_$($dump)_$($cast)_$($station).hex"
+                $dateUTC = [datetime]::ParseExact($row.'Date GMT', 'MM/dd/yyyy', $null)
+                $timeUTC = [datetime]::ParseExact($row.'Time GMT', 'HH:mm', $null)
+                $expectedFilename = "$($dateUTC.ToString('yyMM'))_$($ctd)_$($dump)_$($cast)_$($station).hex"
                 $expectedPath = Join-Path $HexFolder $expectedFilename
                 Log-Message "info" "Expected filename (station $($station): $($expectedPath)"
 
                 if (Test-Path $expectedPath) {
                     Log-Message "info" "✅ Found: $expectedFilename"
+                    $this._matched_recs_count++
 
                     # Construct a hashtable with all the necessary data:
 
                     # Note: For now we will grab the first observer in the array.
                     #$observers = $row.Observers -split "," | ForEach-Object { $_.Trim() }
                     $observers = $row.Observer -split ","
-                    $dateGMT = [datetime]::Parse($row.'Date GMT')
-                    $timeGMT = [datetime]::Parse($row.'Time GMT') 
-
+                    #$dateGMT = [datetime]::Parse($row.'Date GMT')
+                    #$timeGMT = [datetime]::Parse($row.'Time GMT') 
+                    #$dateUTC = [datetime]::Parse($row.'Date GMT')
+                    #$timeUTC = [datetime]::Parse($row.'Time GMT') 
+                    Log-Message "info" "################ $dateUTC ######################"
+                    Log-Message "info" "################ $timeUTC ######################"
                     # Need to convert the local date/time variables into UTC:
-                    $dateUTC = $null
-                    $timeUTC = $null
+                    #$dateUTC = $null
+                    #$timeUTC = $null
 
+                    <# Timestamp already in UTC, this is no longer needed:
                     if (-not ([HexFileMetadata]::ConvertLocalDateTimeToUTC($dateGMT, $timeGMT, [ref]$dateUTC, [ref]$timeUTC))) {
                         Log-Message "error" "Failed to convert '$($dateGMT)' and/or '$($timeGMT)' to UTC time."
                     } else {
                         Log-Message "info" "UTC date = $dateUTC, time = $timeUTC"
                     }
+                    #>
 
                     $updatedFields = @{
                         "Vessel" = $row.Vessel
@@ -196,10 +254,10 @@ class HexFileMetadata {
                         "Longitude" = $row.Longitude
                         #"Date GMT" = $dateGMT.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
                         #"Time GMT" = $timeGMT.ToString("HH:mm") # Need to reformat, currently '8:24'
-                        #"Date GMT" = $dateUTC.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
-                        #"Time GMT" = $timeUTC.ToString("HH:mm") # Need to reformat, currently '8:24'
-                        "Date GMT" = $dateUTC
-                        "Time GMT" = $timeUTC
+                        "Date GMT" = $dateUTC.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
+                        "Time GMT" = $timeUTC.ToString("HH:mm") # Need to reformat, currently '8:24'
+                        #"Date GMT" = $dateUTC
+                        #"Time GMT" = $timeUTC
                         "Fathometer depth" = $row.'Fathometer Depth'
                         "Cast target depth" = $row.'Target Depth'
                         "Comments" = $row.Comments
@@ -212,6 +270,7 @@ class HexFileMetadata {
                     }
                 } else {
                     Log-Message "warning" "❌ No match for StationObjectID: $($row.StationObjectID)"
+                    $this._unmatched_recs_count++
                 }
             } catch {
                 Log-Message "error" "Error processing row: $($_.Exception.Message)"
@@ -224,26 +283,32 @@ class HexFileMetadata {
     <# function GetYearMonthFromFilename
      # Reads the first four characters of the first .hex file found, and stores this for use when matching the .hex filenames.
      #>
-    [void] GetYearMonthFromFilename() {
+    [string] GetYearMonthFromFilename($hexFileName) {
 
         # Get the first .hex file in the folder. If none are found, the variable will be empty. No error is generated.
-        $firstHexFile = Get-ChildItem -Path $this._hex_file_dir -Filter '*.hex' | Sort-Object Name | Select-Object -First 1
+        #$firstHexFile = Get-ChildItem -Path $this._hex_file_dir -Filter '*.hex' | Sort-Object Name | Select-Object -First 1
 
-        if (-not $firstHexFile) {
+        #if (-not $firstHexFile) {
+        if (-not $hexFileName) {
             throw "No .hex files found in '$($this._hex_file_dir)'."
         }
 
         # Extract the first 4 characters
-        $yyMM = $firstHexFile.BaseName.Substring(0, 4)
+        #$yyMM = $firstHexFile.BaseName.Substring(0, 4)
+        $yyMM = $hexFileName.BaseName.Substring(0, 4)
 
         # Optional: Validate the extracted yyMM format
         if ($yyMM -notmatch '^\d{4}$') {
-            throw "The filename '$($firstHexFile.Name)' does not start with a valid yyMM format."
+            #throw "The filename '$($firstHexFile.Name)' does not start with a valid yyMM format."
+            throw "The filename '$($hexFileName.Name)' does not start with a valid yyMM format."
         }
 
         # Output the result
-        Log-Message "info" "Extracted yyMM: $yyMM from file: $($firstHexFile.Name)"
-        $this._yyMM = $yyMM
+        #Log-Message "info" "Extracted yyMM: $yyMM from file: $($firstHexFile.Name)"
+        #$this._yyMM = $yyMM
+
+        # Return the result:
+        return $yyMM
 
     } # end GetYearMonthFromFilename
 
@@ -438,28 +503,32 @@ function Log-To-File($msg) {
 
 Log-Message "info" "Starting the 'write_metadata_to_hex_files.ps1' script..."
 
-if ($args.Count -ne 3) {
-    Log-Message "error" "ERROR! Must pass in the .HEX files directory, and the full path and filenames for the survey and station metadata CSV files."
-    $result = -3
-} else {
-    try {
-        Log-Message "info" "args:"
-        Log-Message "info" ".HEX files directory: $($args[0])"
-        Log-Message "info" "Survey metadata CSV: $($args[1])"
-        Log-Message "info" "Station metadata CSV: $($args[2])"
+$metadata = $null
 
-        $metadata = [HexFileMetadata]::new($args[0], $args[1], $args[2])
-        $metadata.GetYearMonthFromFilename()
-        $metadata.MergeCsvData()
-        $metadata.MatchHexFiles()
-        $result = 0
-    } catch {
-        Log-Message "error" $_.Exception.Message
-        $result = -1
-    } finally {
-        Log-Message "info" "Program completed with code $result (0 indicates success)."
-        Log-Message "info" "==========================================================`n"
+try {
+    if ($args.Count -ne 2) {
+        #Log-Message "error" "ERROR! Must pass in the .HEX files directory, and the full path and filename of the metadata CSV file."
+        $result = -3
+        throw "ERROR! Must pass in the .HEX files directory, and the full path and filename of the metadata CSV file."
     }
-        
+
+    Log-Message "info" "args:"
+    Log-Message "info" ".HEX files directory: $($args[0])"
+    Log-Message "info" "Metadata CSV: $($args[1])"
+
+    $metadata = [HexFileMetadata]::new($args[0], $args[1])
+    #$metadata.GetYearMonthFromFilename()
+    $metadata.LoadCsvData()
+    $metadata.MatchHexFiles()
+    Log-Message "info" "Hex files count: $($metadata._merged_data.Count)"
+    Log-Message "info" "Matched files: $($metadata._matched_recs_count)"
+    Log-Message "info" "Unmatched Files: $($metadata._unmatched_recs_count)"
+    $result = 0
+} catch {
+    Log-Message "error" $_.Exception.Message
+    $result = -1
+} finally {
+    Log-Message "info" "Program completed with code $result (0 indicates success)."
+    Log-Message "info" "==========================================================`n"
 }
 
