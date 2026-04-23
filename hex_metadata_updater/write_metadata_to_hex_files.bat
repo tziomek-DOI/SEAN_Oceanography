@@ -1,12 +1,11 @@
 @echo off
 rem write_metadata_to_hex_files.bat
-rem This batch file launches a PowerShell script, which reads the AGOL CSV files from OC Survey123,
+rem This batch file launches a PowerShell script, which reads the CSV files from the oc_station_metadata_form app,
 rem and updates the .hex files with the metadata for each station.
 
-rem Must pass in three arguments:
+rem Must pass in two arguments:
 rem 1. Name of directory where the original HEX files are located.
-rem 2. Path and filename of the 'survey' metadata CSV file from Survey123/AGOL.
-rem 3. Path and filename of the 'station' metadata CSV file from Survey123/AGOL.
+rem 2. Path and filename of the 'survey' metadata CSV file from the oc_station_metadata_form app.
 
 rem The script will create a subdirectory inside the original HEX files directory.
 rem This directory will be named 'hex_files_with_metadata'.
@@ -20,27 +19,27 @@ set /p username="Enter username (for OneDrive path): "
 rem invoke write_metadata_to_hex_files.ps1
 
 rem Set this to the ps1 script location and filename:
-set "script=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\write_metadata_to_hex_files.ps1"
+set "script=C:\Users\%username%\OneDrive - DOI\Oceanography\File_Processing\hex_metadata_updater\write_metadata_to_hex_files.ps1"
 
 rem Set this to the directory containing the raw .hex files from the CTD (after they have been renamed):
-set "hex_files_dir=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\data\hex_files\"
+set "hex_files_dir=C:\Users\%username%\OneDrive - DOI\Oceanography\File_Processing\hex_metadata_updater\data\hex_files\"
 
-rem Set this to the path + filename of the 'survey' CSV file:
-set "survey_csv=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\data\glba_oc_survey_metadata.csv"
+rem Set this to the path + filename of the survey CSV file:
+set /p csv_filename="Enter the name of the CSV file from the oc_station_metadata_form app: "
 
-rem Set this to the path + filename of the 'station' CSV file:
-set "station_csv=C:\Users\%username%\OneDrive - DOI\Oceanography\hex_metadata_updater\data\glba_oc_survey_station_data.csv"
+set "survey_csv=C:\Users\%username%\OneDrive - DOI\Oceanography\File_Processing\station_metadata_form\data\%csv_filename%"
 
 rem echo Preparing to run the PowerShell script...
 echo Preparing to run the script for user '%username%'. Settings:
 echo PowerShell script location: %script%
 echo Original .HEX files directory: %hex_files_dir%
-echo Survey CSV file: %survey_csv%
-echo Station CSV file: %station_csv%
-
-rem pause
+echo CSV file: %survey_csv%
+echo(
+echo Press any key to continue (or CTRL+C to cancel)...
+echo(
+pause
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
-    "& { & '%script%' '%hex_files_dir%' '%survey_csv%' '%station_csv%' }"
+    "& { & '%script%' '%hex_files_dir%' '%survey_csv%' }"
 
 rem This keeps the cmd window open to view results
 pause
