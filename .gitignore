@@ -27,6 +27,7 @@ station_metadata_form/*.log
 hex_metadata_updater/previous_versions
 hex_metadata_updater/*.log
 libs/
+libs.zip
 .idea/
 oc_m_data_quality_entry/data/glacier_bay_ctd*
 oc_m_data_quality_entry/data/oc_m_preload*
