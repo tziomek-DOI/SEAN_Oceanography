@@ -28,4 +28,11 @@ hex_metadata_updater/previous_versions
 hex_metadata_updater/*.log
 libs/
 .idea/
+oc_m_data_quality_entry/data/glacier_bay_ctd*
+oc_m_data_quality_entry/data/oc_m_preload*
+oc_m_data_quality_entry/testikle.json
+oc_m_data_quality_entry/oc_m_submission_2025*
+oc_m_data_quality_entry/*.log
+oc_m_data_quality_entry/.idea
+*__pycache__*
 
