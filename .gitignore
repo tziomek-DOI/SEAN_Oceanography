@@ -21,4 +21,11 @@ testarea/
 CNV_converter_for_ODV/
 hex_metadata_updater/test
 station_metadata_form/.idea
+station_metadata_form/data/
+station_metadata_form/libs_moved_to_parent/
+station_metadata_form/*.log
+hex_metadata_updater/previous_versions
+hex_metadata_updater/*.log
+libs/
+.idea/
 
