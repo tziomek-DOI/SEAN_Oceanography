@@ -48,7 +48,21 @@ from version import __version__
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'libs'))
+from pathlib import Path
+# sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'libs'))
+
+# Shared vendored dependencies (PyQt6, etc.) live one level up from this
+# app's folder, in SEAN_Data-Management/libs, shared with dm_tools and
+# other sibling apps - this avoids duplicating large packages like
+# PyQt6 across every app.
+_APP_DIR = Path(__file__).resolve().parent
+_LIBS_DIR = _APP_DIR.parent / "libs"
+sys.path.insert(0, str(_LIBS_DIR))
+
+# print("APP_DIR:", _APP_DIR)
+# print("LIBS_DIR:", _LIBS_DIR)
+# print("LIBS_DIR exists:", _LIBS_DIR.exists())
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFormLayout, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QFileDialog,
     QComboBox, QTextEdit, QPushButton, QLabel, QSplitter, QMessageBox, QGroupBox, QFrame, QListWidget, QListWidgetItem

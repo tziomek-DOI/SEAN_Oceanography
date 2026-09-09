@@ -31,9 +31,9 @@ _APP_DIR = Path(__file__).resolve().parent
 _LIBS_DIR = _APP_DIR.parent / "libs"
 sys.path.insert(0, str(_LIBS_DIR))
 
-print("APP_DIR:", _APP_DIR)
-print("LIBS_DIR:", _LIBS_DIR)
-print("LIBS_DIR exists:", _LIBS_DIR.exists())
+# print("APP_DIR:", _APP_DIR)
+# print("LIBS_DIR:", _LIBS_DIR)
+# print("LIBS_DIR exists:", _LIBS_DIR.exists())
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
