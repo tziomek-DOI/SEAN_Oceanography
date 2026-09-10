@@ -1,0 +1,72 @@
+# Setup Instructions: OC Station Metadata Form
+
+These steps only need to be done once, and all OC apps will be set up. 
+After setup, you'll launch the tool by double-clicking a single file.
+
+## Before you start:
+
+Make sure Python has been installed on this computer via Company Portal.
+(If you're not sure, that's fine — just continue with the steps below and
+let me know if something doesn't work.)
+
+---
+
+## Step 1: Download the program
+
+1. Go to this link: https://github.com/tziomek-DOI/SEAN_Oceanography
+2. Click the green **"Code"** button, then **"Download ZIP"**
+3. Once downloaded, find the ZIP file (usually in your **Downloads** folder)
+4. Right-click it and choose "Extract All..."
+5. Choose a permanent location for this folder — for example, your
+   **Documents** folder or **Desktop**. This is where the program will live
+   going forward, so pick somewhere you won't accidentally delete it.
+6. After extracting, you should have a folder named 'SEAN_Oceanography'
+   containing several subfolders, including one called
+   'oc_m_data_quality_entry' and another called 'station_metadata_form'.
+
+## Step 2: Download the shared libraries
+
+1. Go to this link: https://github.com/tziomek-DOI/SEAN_Oceanography/releases/tag/libs_oc_2026-09-09
+2. Under "Assets," click 'libs.zip' to download it.
+3. Right-click the downloaded `libs.zip` and choose "Extract All..."
+4. This will create a folder called 'libs' (short for 'libraries').
+5. Move (or copy) this 'libs' folder so that it sits directly inside the
+   'SEAN_Oceanography' folder from Step 1 — as a sibling to 'station_metadata_form', not inside it.
+
+Your folder should now look like this:
+
+```
+SEAN_Oceanography/
+├── libs/                        <- from Step 2
+├── oc_m_data_quality_entry/     <- from Step 1
+├── station_metadata_form/
+├── hex_metadata_updater
+├── CNV_to_ODV
+├── metadata
+├── database
+├── ... (survey year folders containing CON files, etc.)
+└── ... (oceanography process files - .bat, .psa, etc.)
+```
+
+If it doesn't look like this — for example, if you see
+`SEAN_Oceanography/libs/libs/` (a folder inside a folder) — go back and
+re-check where you extracted things. This is the most common step to get
+slightly wrong, so it's worth a careful look before moving on.
+
+## Step 3: Launch the program
+
+1. Open the 'station_metadata_form' folder
+2. Find and double-click the file that starts the program (file `oc_station_metadata_form.bat`).
+3. A command prompt window should open in the background (this is normal; leave this window open while operating the app),
+and the program should open shortly afterward.
+
+---
+
+## If something doesn't work
+
+Don't worry about troubleshooting this yourself — just note:
+- What step you were on...
+- Anything you see on screen, especially popup messages or text inside the command-line window (a screenshot is great if you can take one).
+
+...and send it to the Data Manager. This is a new setup process, so hiccups are expected
+and easy to fix.
