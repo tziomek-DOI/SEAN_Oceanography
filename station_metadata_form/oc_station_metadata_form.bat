@@ -82,14 +82,14 @@ echo pip not found. >> "%LOGFILE%"
 goto End
 
 :RunScript
-echo Running gps_app.py...
-echo Running gps_app.py... >> "%LOGFILE%"
+echo Running %SCRIPT%...
+echo Running %SCRIPT%... >> "%LOGFILE%"
 
 :: Use a temporary file to capture output
 set "TMPLOG=%TEMP%\oc_station_metadata_form_output.tmp"
 
 :: Run the script synchronously and capture output
-python "%SCRIPT%" > "%TEMP%\oc_station_metadata_form_output.tmp" 2>&1
+python "%SCRIPT%" > "%TMPLOG%" 2>&1
 set "EXITCODE=%ERRORLEVEL%"
 
 type "%TMPLOG%" >> "%LOGFILE%"
@@ -98,7 +98,7 @@ type "%TMPLOG%" >> "%LOGFILE%"
 if %EXITCODE% NEQ 0 (
     echo Error occurred while running %SCRIPT%.
     echo Error occurred while running %SCRIPT%. >> "%LOGFILE%"
-    type "%TEMP%\oc_station_metadata_form_output.tmp"
+    type "%TMPLOG%"
     echo Exit code: %EXITCODE% >> "%LOGFILE%"
     pause
 ) else (
@@ -109,5 +109,6 @@ if %EXITCODE% NEQ 0 (
 :End
 echo.
 echo === Script ended at %DATE% %TIME% === >> "%LOGFILE%"
-echo. >> "%LOGFILE%" 
+echo. >> "%LOGFILE%"
+pause
 endlocal

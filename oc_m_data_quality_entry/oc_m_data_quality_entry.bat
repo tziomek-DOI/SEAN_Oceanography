@@ -4,6 +4,7 @@ setlocal enabledelayedexpansion
 
 :: Set up script and log file
 set "SCRIPT=%~dp0main.py"
+set "APPNAME=oc_m_data_quality_entry"
 set "LOGFILE=%~dp0oc_m_data_quality_entry.log"
 
 echo === Script started at %DATE% %TIME% === >> "%LOGFILE%"
@@ -82,8 +83,8 @@ echo pip not found. >> "%LOGFILE%"
 goto End
 
 :RunScript
-echo Running gps_app.py...
-echo Running gps_app.py... >> "%LOGFILE%"
+echo Running %APPNAME%.%SCRIPT%...
+echo Running %APPNAME%.%SCRIPT%... >> "%LOGFILE%"
 
 :: Use a temporary file to capture output
 set "TMPLOG=%TEMP%\oc_m_data_quality_entry_output.tmp"
@@ -111,5 +112,6 @@ if %EXITCODE% NEQ 0 (
 :End
 echo.
 echo === Script ended at %DATE% %TIME% === >> "%LOGFILE%"
-echo. >> "%LOGFILE%" 
+echo. >> "%LOGFILE%"
+pause
 endlocal

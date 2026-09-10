@@ -2,6 +2,10 @@
 # Author: T. Ziomek with AI help (ChatGPT and Grok)
 #
 # Change log
+# v0.8.0
+# Reconfigured the imports to point to a shared 'libs/' directory, positioned at the sibling
+# level with this (and other) apps. Primarily done due to large size of PyQt6.
+#
 # v0.7.0
 # A number of bug fixes and UI tweaks were made, to allow more seamless disconnecting from GPS.
 # In practice, one external USB device would be shared between two separate apps - this one, and SeaLog.
@@ -49,7 +53,10 @@ from version import __version__
 import sys
 import os
 from pathlib import Path
-# sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'libs'))
+import time
+from datetime import datetime, UTC
+import csv
+import json  # Use JSON to manipulate records. A CSV export would be done separately.
 
 # Shared vendored dependencies (PyQt6, etc.) live one level up from this
 # app's folder, in SEAN_Data-Management/libs, shared with dm_tools and
@@ -71,13 +78,9 @@ from PyQt6.QtWidgets import (
 # Added QThread and pyqtSignal to implement the threaded GPS polling.
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QDoubleValidator, QIntValidator, QAction
+from serial import Serial, SerialException  # Assuming your libs/serial for GPS connection
+from serial.tools import list_ports  # This will feed a dropdown with available COM ports/devices
 
-import time
-from datetime import datetime, UTC
-import csv
-from libs.serial import Serial, SerialException  # Assuming your libs/serial for GPS connection
-from libs.serial.tools import list_ports  # This will feed a dropdown with available COM ports/devices
-import json  # Use JSON to manipulate records. A CSV export would be done separately.
 
 # This is used for the "Comments" box. The default behavior when hitting the TAB key from within
 # the Comments TextEdit box is to actually make a TAB (indent) character.
@@ -90,11 +93,13 @@ class CustomTextEdit(QTextEdit):
         else:
             super().keyPressEvent(event)  # Handle other keys normally
 
+
 # ChatGPT offered up this class and related code.
 # Instead of using the QTimer for polling GPS, this implements running a loop reading the serial port.
 # Whenever valid NMEA arrives, it emits a QT signal.
 # It should stop gracefully when requested.
-# This version replaces v0.3a, and should update the gps_label with the coords (it also does course/speed, but we might not use that).
+# This version replaces v0.3a, and should update the gps_label with the coords
+# (it also does course/speed, but we might not use that).
 class GPSWorker(QThread):
     position_update = pyqtSignal(float, float, float, float)
     error = pyqtSignal(str)
