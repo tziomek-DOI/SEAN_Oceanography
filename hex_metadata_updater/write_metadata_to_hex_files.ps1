@@ -151,7 +151,8 @@ class HexFileMetadata {
                 Station             = $row.station
                 Latitude            = $row.decimalLatitude
                 Longitude           = $row.decimalLongitude
-                'Date GMT'          = $dt.ToString("MM/dd/yyyy")
+                #'Date GMT'          = $dt.ToString("MM/dd/yyyy")
+                'Date GMT'          = $dt.ToString("yyyy/MM/dd")
                 'Time GMT'          = $dt.ToString("HH:mm")
                 'Fathometer Depth'  = $row.fathometer_depth
                 'Target Depth'      = $row.target_depth
@@ -209,8 +210,8 @@ class HexFileMetadata {
                 $cast   = "{0:D3}" -f [int]$row.'Cast#'
                 $station = "{0:D2}" -f [int]$row.'Station'
 
-                #$expectedFilename = "$($this._yyMM)_$($ctd)_$($dump)_$($cast)_$($station).hex"
-                $dateUTC = [datetime]::ParseExact($row.'Date GMT', 'MM/dd/yyyy', $null)
+                #$dateUTC = [datetime]::ParseExact($row.'Date GMT', 'MM/dd/yyyy', $null)
+                $dateUTC = [datetime]::ParseExact($row.'Date GMT', 'yyyy/MM/dd', $null)
                 $timeUTC = [datetime]::ParseExact($row.'Time GMT', 'HH:mm', $null)
                 $expectedFilename = "$($dateUTC.ToString('yyMM'))_$($ctd)_$($dump)_$($cast)_$($station).hex"
                 $expectedPath = Join-Path $HexFolder $expectedFilename
@@ -225,23 +226,11 @@ class HexFileMetadata {
                     # Note: For now we will grab the first observer in the array.
                     #$observers = $row.Observers -split "," | ForEach-Object { $_.Trim() }
                     $observers = $row.Observer -split ","
-                    #$dateGMT = [datetime]::Parse($row.'Date GMT')
-                    #$timeGMT = [datetime]::Parse($row.'Time GMT') 
-                    #$dateUTC = [datetime]::Parse($row.'Date GMT')
-                    #$timeUTC = [datetime]::Parse($row.'Time GMT') 
                     Log-Message "info" "################ $dateUTC ######################"
                     Log-Message "info" "################ $timeUTC ######################"
                     # Need to convert the local date/time variables into UTC:
                     #$dateUTC = $null
                     #$timeUTC = $null
-
-                    <# Timestamp already in UTC, this is no longer needed:
-                    if (-not ([HexFileMetadata]::ConvertLocalDateTimeToUTC($dateGMT, $timeGMT, [ref]$dateUTC, [ref]$timeUTC))) {
-                        Log-Message "error" "Failed to convert '$($dateGMT)' and/or '$($timeGMT)' to UTC time."
-                    } else {
-                        Log-Message "info" "UTC date = $dateUTC, time = $timeUTC"
-                    }
-                    #>
 
                     $updatedFields = @{
                         "Vessel" = $row.Vessel
@@ -252,12 +241,9 @@ class HexFileMetadata {
                         "Station" = $station
                         "Latitude" = $row.Latitude
                         "Longitude" = $row.Longitude
-                        #"Date GMT" = $dateGMT.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
-                        #"Time GMT" = $timeGMT.ToString("HH:mm") # Need to reformat, currently '8:24'
-                        "Date GMT" = $dateUTC.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
+                        #"Date GMT" = $dateUTC.ToString("MM/dd/yyyy") # Need to reformat, currently '5/30/2025 20:00'
+                        "Date GMT" = $dateUTC.ToString("yyyy/MM/dd") # Need to reformat, currently '5/30/2025 20:00'
                         "Time GMT" = $timeUTC.ToString("HH:mm") # Need to reformat, currently '8:24'
-                        #"Date GMT" = $dateUTC
-                        #"Time GMT" = $timeUTC
                         "Fathometer depth" = $row.'Fathometer Depth'
                         "Cast target depth" = $row.'Target Depth'
                         "Comments" = $row.Comments
@@ -431,18 +417,13 @@ class HexFileMetadata {
         try {
             # Time zone object for Alaska (handles DST automatically)
             $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Alaskan Standard Time")
-
+            $date_format = "yyyy/MM/dd"
             # Combine into one DateTime string and parse
-            $localDTcombined = "$((Get-Date $dateLocal).ToString("MM/dd/yyyy")) $((Get-Date $timeLocal).ToString("HH:mm"))"
+            #$localDTcombined = "$((Get-Date $dateLocal).ToString("MM/dd/yyyy")) $((Get-Date $timeLocal).ToString("HH:mm"))"
+            $localDTcombined = "$((Get-Date $dateLocal).ToString("yyyy/MM/dd")) $((Get-Date $timeLocal).ToString("HH:mm"))"
             Log-Message "info" "Combined local time: $($localDTCombined)."
-            $localDateTime = [datetime]::ParseExact($localDTcombined, "MM/dd/yyyy HH:mm", $null)
-            <#
-            $localDateTime = [datetime]::ParseExact(
-                "$dateLocalDateOnly $timeLocal",
-                "MM/dd/yyyy HH:mm",
-                $null
-            )
-            #>
+            #$localDateTime = [datetime]::ParseExact($localDTcombined, "MM/dd/yyyy HH:mm", $null)
+            $localDateTime = [datetime]::ParseExact($localDTcombined, "yyyy/MM/dd HH:mm", $null)
 
             # Treat as Alaska local time
             $localDateTime = [System.TimeZoneInfo]::ConvertTime($localDateTime, $tz)
@@ -451,7 +432,8 @@ class HexFileMetadata {
             $utcDateTime = [System.TimeZoneInfo]::ConvertTimeToUtc($localDateTime, $tz)
 
             # Split into date + time variables, and store them in the reference parameters:
-            $dateUTC.Value = $utcDateTime.ToString("MM/dd/yyyy")
+            #$dateUTC.Value = $utcDateTime.ToString("MM/dd/yyyy")
+            $dateUTC.Value = $utcDateTime.ToString("yyyy/MM/dd")
             $timeUTC.Value = $utcDateTime.ToString("HH:mm")
 
             Write-Host "Local Alaska time: $dateLocal $timeLocal"
