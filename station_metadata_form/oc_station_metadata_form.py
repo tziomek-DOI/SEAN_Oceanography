@@ -2,6 +2,22 @@
 # Author: T. Ziomek with AI help (ChatGPT and Grok)
 #
 # Change log
+# v0.9.0
+# Added "Edit Config" and "Edit Stations" menu items under Settings, each opening a simple
+# text-editor dialog (shared helper: edit_text_file_dialog) that lets the user edit the
+# config CSV or the new stations.txt directly and save in place.
+# Config and widget settings (field max-lengths, lat/long validator ranges, comments box
+# height) now live-reload immediately after saving via Edit Config, with no app restart
+# required. Extracted this logic into new method apply_config_to_widgets().
+# Station dropdown (previously hardcoded 00-24) is now populated from config/stations.txt,
+# one station code per line, allowing alphanumeric entries (e.g. "M1") alongside the
+# numeric range. New method load_stations() handles loading, and auto-creates the file
+# pre-populated with 00-24 if missing on startup.
+# Bug fix: gps_disconnect() now checks hasattr(self, "gps_worker") before referencing it,
+# matching the guard already used elsewhere (submit(), on_gps_error()).
+# Bug fix: longitude_edit was missing its QDoubleValidator (lon_validator was constructed
+# but never attached) - now attached, matching latitude's validator.
+#
 # v0.8.0
 # Reconfigured the imports to point to a shared 'libs/' directory, positioned at the sibling
 # level with this (and other) apps. Primarily done due to large size of PyQt6.
@@ -72,7 +88,8 @@ sys.path.insert(0, str(_LIBS_DIR))
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFormLayout, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QFileDialog,
-    QComboBox, QTextEdit, QPushButton, QLabel, QSplitter, QMessageBox, QGroupBox, QFrame, QListWidget, QListWidgetItem
+    QComboBox, QTextEdit, QPushButton, QLabel, QSplitter, QMessageBox, QGroupBox, QFrame, QListWidget, QListWidgetItem,
+    QDialog
 )
 
 # Added QThread and pyqtSignal to implement the threaded GPS polling.
@@ -286,10 +303,15 @@ class GPSApp(QMainWindow):
             return
 
         # Load the config CSV file:
+        # Load the config CSV file:
         self.config = {} # will store key/value pairs
         self.statusBar().showMessage("Loading config file...")
         self.load_config()
         self.statusBar().showMessage("Config file loaded.", 5000)
+
+        # Path to the stations list file (separate from the main config CSV,
+        # so users can edit it without worrying about CSV quoting rules).
+        self.stations_file = os.path.join(self.config_dir, "stations.txt")
 
         # set the name of the JSON file used to store records (separate from the CSV export file)
         # Load default JSON file which stores the records:
@@ -323,14 +345,8 @@ class GPSApp(QMainWindow):
         self.statusBar().addPermanentWidget(self.gps_label) # status bar will always be connected to GPS messages
 
         self.cruise_edit = QLineEdit()
-        self.cruise_max_len = self.config.get('cruise_max_length', 20)
-        self.cruise_edit.setMaxLength(self.cruise_max_len)
         self.vessel_edit = QLineEdit()
-        self.vessel_max_len = self.config.get('vessel_max_length', 24)
-        self.vessel_edit.setMaxLength(self.vessel_max_len)
         self.observer_edit = QLineEdit()
-        self.observer_max_len = self.config.get('observer_max_length', 50)
-        self.observer_edit.setMaxLength(self.observer_max_len)
         self.ctd_combo = QComboBox()
         self.ctd_combo.addItems(["7", "8"])  # Replace with your actual CTD items
         self.dump_edit = QLineEdit()
@@ -342,7 +358,7 @@ class GPSApp(QMainWindow):
         self.cast_edit.setValidator(cast_validator)
         self.cast_edit.setToolTip("Enter value between 0-1XX for cast number.")
         self.station_combo = QComboBox()
-        self.station_combo.addItems(["{:02d}".format(i) for i in range(0, 25)])  # Populates dropdown with 00-24
+        self.load_stations()  # Populates dropdown from config/stations.txt
 
         depth_validator = QIntValidator(1, 999)
         self.fathometer_edit = QLineEdit()
@@ -352,37 +368,21 @@ class GPSApp(QMainWindow):
         self.target_edit.setValidator(depth_validator)
         self.target_edit.setToolTip("Enter value between 1-999 for target depth, in meters (m).")
         self.latitude_edit = QLineEdit()
-        self.latitude_min = self.config.get('latitude_min', 58.0)
-        self.latitude_max = self.config.get('latitude_max', 60.0)
-        self.latitude_precision = self.config.get('latitude_decimal_places', 6)
-        lat_validator = QDoubleValidator(self.latitude_min, self.latitude_max, self.latitude_precision)
-        lat_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
-        self.latitude_edit.setValidator(lat_validator)
-        self.latitude_edit.setToolTip("Enter latitude in decimal degrees (e.g., 58.3019)")
-        #self.latitude_help_btn = QPushButton("ⓘ")
-        #self.latitude_help_btn.setFixedWidth(self.help_btn_size)
-        #self.latitude_help_btn.setFixedSize(10,10)
-        #self.latitude_help_btn.setProperty("help_text", "Enter latitude in decimal degrees.\nExample: 58.3019")
-        #self.latitude_help_btn.clicked.connect(self.show_widget_help)
-        #self.latitude_help_btn = self.create_help_button("Enter latitude in decimal degrees.\nExample: 58.3019")
         self.longitude_edit = QLineEdit()
-        self.longitude_min = self.config.get('longitude_min', -137.0)
-        self.longitude_max = self.config.get('longitude_max', -134.0)
-        self.longitude_precision = self.config.get('longitude_decimal_places', 6)
-        lon_validator = QDoubleValidator(self.longitude_min, self.longitude_max, self.longitude_precision)
-        lon_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
-        self.longitude_edit.setToolTip("Enter longitude in decimal degrees (e.g., -135.3020)")
         self.current_coords_btn = QPushButton("Get Current Coordinates")
         self.current_coords_btn.clicked.connect(self.get_current_coordinates)
         self.comments_edit = CustomTextEdit()
-        self.comments_max_len = self.config.get('comments_max_length', 512)
-        self.comments_edit.setMaximumHeight(self.comments_max_len)
         self.submit_btn = QPushButton("Submit")
         self.submit_btn.clicked.connect(self.submit)
         self.clear_btn = QPushButton("Clear fields")
         self.clear_btn.clicked.connect(self.cancel_clear)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+
+        # Apply config-driven settings (max lengths, validator ranges) to the widgets
+        # created above. Also called after the user saves the config via the Edit Config
+        # dialog, so changes take effect without restarting the app.
+        self.apply_config_to_widgets()
 
         # Using a QListWidget for the right side logging and edit functionality.
         self.log_list = QListWidget()
@@ -533,7 +533,8 @@ class GPSApp(QMainWindow):
                 "E&xit": self.close
             },
             "&Settings": {
-                "&Config File": self.show_config,
+                "&Edit Config": self.show_config,
+                "Edit &Stations": self.show_stations_editor,
                 f"{gps_errors_str}": self.toggle_gps_errors,
                 "Refresh S&tyles": self.load_stylesheet
             },
@@ -805,13 +806,6 @@ class GPSApp(QMainWindow):
         else:
             self.gps_disconnect()
 
-    # def toggle_gps_worker(self):
-    #     if self.gps_worker_active:
-    #         self.gps_worker_active = False
-    #     else:
-    #         QMessageBox.information(self, "GPS", "Make sure no other devices/apps are\nusing the GPS port before connecting.")
-    #         self.gps_worker_active = True
-
     # ChatGPT offered this set of functions which are used to implement the QThread-based GPS functionality:
     def gps_connect(self):
         print(f"connect: self id = {id(self)}")
@@ -843,22 +837,21 @@ class GPSApp(QMainWindow):
         #self.connect_btn.setStyleSheet("background-color: green; color: white;")
 
     def gps_disconnect(self):
-        print(f"disconnect: self id = {id(self)}")
-        if self.gps_worker:
-            self.gps_worker.stop() # this doesnt work (gps_worker is None). # Could try .requestInterruption() pattern.
-
-        #QMessageBox.information(self, "GPS", "GPS disconnected. Unplug the device, then click 'Refresh Ports'.")
-        QMessageBox.information(self, "GPS", "GPS disconnected.")
-        self.gps_connected = False
-        self.connect_btn.setText("Connect GPS")
-        self.connect_btn.setStyleSheet("background-color: red; color: white;")
-        self.gps_label.setText("GPS Disconnected.")
-        self.current_lat = None
-        self.current_lon = None
-        self.gps_worker.current_lon = None
-        self.gps_worker.current_lat = None
-        self.latitude_edit.setText("")
-        self.longitude_edit.setText("")
+            print(f"disconnect: self id = {id(self)}")
+            if hasattr(self, "gps_worker") and self.gps_worker:
+                self.gps_worker.stop() # this should work via hasattr condition. # Could try .requestInterruption() pattern.
+                
+            QMessageBox.information(self, "GPS", "GPS disconnected.")
+            self.gps_connected = False
+            self.connect_btn.setText("Connect GPS")
+            self.connect_btn.setStyleSheet("background-color: red; color: white;")
+            self.gps_label.setText("GPS Disconnected.")
+            self.current_lat = None
+            self.current_lon = None
+            self.gps_worker.current_lon = None
+            self.gps_worker.current_lat = None
+            self.latitude_edit.setText("")
+            self.longitude_edit.setText("")
 
     def gps_refresh_ports(self):
         try:
@@ -1448,9 +1441,81 @@ class GPSApp(QMainWindow):
         self.longitude_edit.setText(f"{float(record['decimalLongitude']):.6f}")
         self.comments_edit.setText(record['fieldNotes'])
 
-    # Placeholders for menu callbacks
+    # show_config
+    # Opens the main config CSV file in a simple text-edit dialog. Saving overwrites
+    # the file as-is and reloads self.config so changes take effect without restarting.
     def show_config(self):
-        QMessageBox.information(self, "Config", "TODO: Configuration editor to go here...")
+        config_filename = "oc_station_metadata_form_config.csv"
+        config_file = os.path.join(self.config_dir, config_filename)
+
+        def reload_config_and_widgets():
+            self.load_config()
+            self.apply_config_to_widgets()
+
+        self.edit_text_file_dialog(
+            file_path=config_file,
+            title="Edit Config",
+            on_save=reload_config_and_widgets
+        )
+
+    # show_stations_editor
+    # Opens config/stations.txt in the same simple text-edit dialog. Saving overwrites
+    # the file and reloads the station dropdown so changes take effect immediately.
+    def show_stations_editor(self):
+        self.edit_text_file_dialog(
+            file_path=self.stations_file,
+            title="Edit Stations",
+            on_save=self.load_stations
+        )
+
+    # edit_text_file_dialog
+    # Shared, minimal text-editor dialog used by both show_config and show_stations_editor.
+    # Loads the file's raw text into a QTextEdit; Save overwrites the file and calls
+    # on_save() (e.g. to reload config/stations into the running app); Cancel discards edits.
+    def edit_text_file_dialog(self, file_path, title, on_save):
+        try:
+            with open(file_path, "r") as f:
+                contents = f.read()
+        except OSError as e:
+            QMessageBox.warning(self, f"{title} Error",
+                                 f"Could not open '{file_path}' for editing.\nError: {e}")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(600, 500)
+
+        layout = QVBoxLayout(dialog)
+        text_edit = QTextEdit()
+        text_edit.setPlainText(contents)
+        text_edit.setFontFamily("Courier")
+        layout.addWidget(text_edit)
+
+        button_row = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        cancel_btn = QPushButton("Cancel")
+        button_row.addStretch()
+        button_row.addWidget(save_btn)
+        button_row.addWidget(cancel_btn)
+        layout.addLayout(button_row)
+
+        def do_save():
+            try:
+                with open(file_path, "w") as f:
+                    f.write(text_edit.toPlainText())
+            except OSError as e:
+                QMessageBox.warning(dialog, f"{title} Error",
+                                     f"Failed to save '{file_path}'.\nError: {e}")
+                return
+
+            dialog.accept()
+            on_save()  # reload config or stations so changes apply immediately
+            self.statusBar().showMessage(f"{title}: file saved.", 5000)
+
+        save_btn.clicked.connect(do_save)
+        cancel_btn.clicked.connect(dialog.reject)
+
+        dialog.exec()
 
     def load_config(self, config_file=None):
         """Load config CSV into self.config dict."""
@@ -1493,6 +1558,79 @@ class GPSApp(QMainWindow):
             return
 
         self.statusBar().showMessage("Config file loaded.", 5000)
+
+    # load_stations
+    # Populates self.station_combo from config/stations.txt (one station code per line).
+    # If the file is missing, warns the user and creates it pre-populated with 00-24,
+    # matching the original hardcoded behavior.
+    def load_stations(self):
+        self.station_combo.clear()
+
+        if not os.path.exists(self.stations_file):
+            msg = f"Stations file '{self.stations_file}' not found. Creating with default stations (00-24)."
+            QMessageBox.warning(self, "Stations File Missing", msg)
+            print(msg)
+
+            default_stations = ["{:02d}".format(i) for i in range(0, 25)]
+            try:
+                with open(self.stations_file, "w") as f:
+                    f.write("\n".join(default_stations) + "\n")
+            except OSError as e:
+                msg = f"Error creating stations file '{self.stations_file}'.\nTry creating the file manually."
+                QMessageBox.warning(self, "Stations File Error", msg)
+                print(f"{msg} Error details: {e}")
+                self.station_combo.addItems(default_stations)  # at least populate the UI for this session
+                return
+
+            self.station_combo.addItems(default_stations)
+            return
+
+        try:
+            with open(self.stations_file, "r") as f:
+                stations = [line.strip() for line in f if line.strip()]
+        except OSError as e:
+            msg = f"Error loading stations file '{self.stations_file}'."
+            QMessageBox.warning(self, "Stations File Error", msg)
+            print(f"{msg} Error details:\n{e}")
+            return
+
+        if not stations:
+            QMessageBox.warning(self, "Stations File Empty",
+                                 f"'{self.stations_file}' contains no station entries.")
+            return
+
+        self.station_combo.addItems(stations)
+
+    # apply_config_to_widgets
+    # Reads self.config and (re)applies the derived limits/validators to the form widgets.
+    # Called once at startup, and again after the user saves changes via Edit Config,
+    # so that settings take effect immediately without restarting the app.
+    def apply_config_to_widgets(self):
+        self.cruise_max_len = self.config.get('cruise_max_length', 20)
+        self.cruise_edit.setMaxLength(self.cruise_max_len)
+
+        self.vessel_max_len = self.config.get('vessel_max_length', 24)
+        self.vessel_edit.setMaxLength(self.vessel_max_len)
+
+        self.observer_max_len = self.config.get('observer_max_length', 50)
+        self.observer_edit.setMaxLength(self.observer_max_len)
+
+        self.latitude_min = self.config.get('latitude_min', 58.0)
+        self.latitude_max = self.config.get('latitude_max', 60.0)
+        self.latitude_precision = self.config.get('latitude_decimal_places', 6)
+        lat_validator = QDoubleValidator(self.latitude_min, self.latitude_max, self.latitude_precision)
+        lat_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.latitude_edit.setValidator(lat_validator)
+
+        self.longitude_min = self.config.get('longitude_min', -137.0)
+        self.longitude_max = self.config.get('longitude_max', -134.0)
+        self.longitude_precision = self.config.get('longitude_decimal_places', 6)
+        lon_validator = QDoubleValidator(self.longitude_min, self.longitude_max, self.longitude_precision)
+        lon_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.longitude_edit.setValidator(lon_validator)
+
+        self.comments_max_len = self.config.get('comments_max_length', 512)
+        self.comments_edit.setMaximumHeight(self.comments_max_len)
 
     def toggle_gps_errors(self, checked):
         QMessageBox.information(self, "GPS", f"GPS error messages are toggled {'ON' if checked else 'OFF'}.")

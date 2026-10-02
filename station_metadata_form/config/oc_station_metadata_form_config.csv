@@ -21,8 +21,6 @@ cruise_max_length,20
 vessel_max_length,24
 # Observer field - set max number of characters (50 matches OC database field size)
 observer_max_length,500
-# Populate the 'Stations' dropdown. 25 means 'less than 25', so max value is actually 24
-stations_max_value,25
 # These max lengths match the OC database field sizes:
 # Comments () field: Max 512 to match database
 comments_max_length,512
