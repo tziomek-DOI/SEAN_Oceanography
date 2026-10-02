@@ -1,0 +1,1 @@
+This folder contains the calibration file (CON File) generated from the preseason calibrations at SBE.  If sensors are swapped this folder may contain multiple CON files. The file name follows this convention -CTD#_YYMM.xmlcon where YYMM are the year and month recorded on the cal. certificate from the last sensor calibration at SBE. Learn more by reading the OC_A protocol.
