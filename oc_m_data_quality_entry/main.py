@@ -84,12 +84,17 @@ def main():
     preload_path, outdir_path = _parse_args()
 
     app = QApplication(sys.argv)
+    # Stylesheet is no longer applied here unconditionally - OCMEntryWindow
+    # now owns this via AppSettings (persisted Settings-menu preference,
+    # defaulting to no stylesheet / native Qt-OS theme on first launch).
+    # See entry_window.py's _apply_saved_style_preference().
 
-    if _SHARED_STYLES_PATH.is_file():
-        with _SHARED_STYLES_PATH.open("r", encoding="utf-8") as fh:
-            app.setStyleSheet(fh.read())
-    else:
-        print(f"Warning: shared style sheet not found at {_SHARED_STYLES_PATH}; using default Qt styling.")
+    #
+    # if _SHARED_STYLES_PATH.is_file():
+    #     with _SHARED_STYLES_PATH.open("r", encoding="utf-8") as fh:
+    #         app.setStyleSheet(fh.read())
+    # else:
+    #     print(f"Warning: shared style sheet not found at {_SHARED_STYLES_PATH}; using default Qt styling.")
 
     if not preload_path.is_file():
         QMessageBox.critical(
