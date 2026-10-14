@@ -1,9 +1,39 @@
 """
 sensor_row_widget.py
 OC_M Project Leader app — one sensor's full grading controls.
-Version: 2026.10.08_02
+Version: 2026.10.13_03
 
 ## ChangeLog
+
+2026.10.13_03: Added a visible per-range list under each sensor's depth
+strip (one row per existing_depth_ranges entry: "start-end: grade",
+each with its own delete button), plus a "Clear all ranges" button -
+fixes re-graded/overlapping depth ranges silently accumulating dead,
+invisible entries in CastEntry.depth_overrides with no way to remove
+them. SensorDepthRange gained a quality_id field, carrying that
+specific override's OWN stored grade (not the resolved/winning grade
+for those depths - see the dataclass's own docstring on why this
+distinction matters: two overlapping entries for the same depths must
+show their own different grades in the list, not both show whichever
+one happens to currently be winning the "last-applied wins" cascade).
+New signals: depthRangeDeleted(str, int), allDepthRangesCleared(str).
+
+2026.10.13_02: Added a depth-override count badge to the row header,
+next to the sensor name - the only always-visible indicator that a
+sensor has depth-range grading on the current cast. Previously this
+was invisible unless the row was manually expanded and the strip's
+colored bands inspected by eye; with 9 rows this made it easy to lose
+track of which sensors had depth overrides after closing a validation
+dialog. SensorRowContext gains depth_override_count (a derived
+property, always len(existing_depth_ranges), so it cannot drift out of
+sync). Badge is hidden entirely when count is 0, so collapsed rows with
+no depth grading look unchanged. Clicking the badge expands the row.
+
+2026.10.13_01: No functional change. Version bump only, to reflect the
+single-file architecture pivot in output_io.py/entry_window.py - this
+file's caller-builds-a-snapshot contract (SensorRowContext/
+SensorDepthRange) already matched the new design with no changes
+needed; confirmed during the pivot rather than assumed.
 
 2026.10.08_02: SensorRowContext now carries the sensor's real existing
 depth-range overrides (new SensorDepthRange, mirroring output_io.
@@ -69,17 +99,28 @@ from depth_strip_widget import (
 
 @dataclass
 class SensorDepthRange:
-    """Plain (start_depth, end_depth) pair for ONE existing depth-range
-    override of THIS sensor on the currently selected cast - a direct,
-    lossless mirror of output_io.DepthRangeOverride's own start_depth/
-    end_depth fields (filtered to this sensor; CastEntry.depth_overrides
-    holds all sensors' ranges mixed together, so the caller filters
-    before building this context). Kept as a separate, minimal type
-    here rather than importing DepthRangeOverride directly, so this
-    widget module has no dependency on output_io.py - it only needs
-    the two depth values, nothing else DepthRangeOverride carries."""
+    """Plain (start_depth, end_depth, quality_id) for ONE existing
+    depth-range override of THIS sensor on the currently selected cast -
+    a direct, lossless mirror of output_io.DepthRangeOverride's own
+    start_depth/end_depth/quality_id fields (filtered to this sensor;
+    CastEntry.depth_overrides holds all sensors' ranges mixed together,
+    so the caller filters before building this context). Kept as a
+    separate, minimal type here rather than importing
+    DepthRangeOverride directly, so this widget module has no
+    dependency on output_io.py.
+
+    quality_id here is this override's OWN stored grade - NOT the
+    resolved/winning grade for these depths. If a later override
+    shadows this one (see DumpEntry.resolved_depth_grade's "last-
+    applied wins"), that shadowing is invisible at this field's level
+    by design: the per-range list is meant to show the PI exactly what
+    each entry actually says, including ones currently being shadowed,
+    so a duplicate/mistaken override can be identified and deleted
+    rather than silently indistinguishable from the one that's winning.
+    """
     start_depth: int
     end_depth: int
+    quality_id: int
 
 
 @dataclass
@@ -102,6 +143,16 @@ class SensorRowContext:
     thresholds: ThresholdBounds | None
     has_cast_selected: bool
 
+    @property
+    def depth_override_count(self) -> int:
+        """Number of depth-range overrides THIS sensor has on the
+        currently selected cast. 0 when none, or when no cast is
+        selected (existing_depth_ranges is always empty in that case).
+        Deliberately a derived property, not a separately-passed field -
+        it's always exactly len(existing_depth_ranges), so there is no
+        way for it to drift out of sync with the list it's counting."""
+        return len(self.existing_depth_ranges)
+
 
 class SensorRowWidget(QWidget):
     """
@@ -120,11 +171,32 @@ class SensorRowWidget(QWidget):
             shows has been accepted (or no overlap existed). The caller
             applies this to the submission and calls refresh() on every
             row whose resolved value could have changed.
+        depthRangeDeleted(str, int)
+            (sensor, index) - PI clicked the delete (\u2715) button next
+            to one entry in this row's depth-range list. index refers
+            to that entry's position within existing_depth_ranges as
+            most recently passed to refresh() - the caller is
+            responsible for removing the matching entry from the real
+            CastEntry.depth_overrides list (filtered to this sensor,
+            same order) and calling refresh() afterward.
+        allDepthRangesCleared(str)
+            (sensor) - PI clicked "Clear all ranges" for this sensor on
+            the currently selected cast. The caller removes every
+            depth_overrides entry for this sensor on this cast.
     """
 
     dumpGradeChanged = pyqtSignal(str, object)
     castGradeChanged = pyqtSignal(str, object)
     depthRangeGraded = pyqtSignal(str, int, int, int)
+    depthRangeDeleted = pyqtSignal(str, int)
+    # (sensor, index) - index into THIS cast's depth_overrides list,
+    # filtered to this sensor in the same order existing_depth_ranges
+    # was built by the caller (see SensorRowContext.existing_depth_ranges
+    # - the caller filters CastEntry.depth_overrides by sensor without
+    # reordering, so index here is positionally meaningful back in
+    # entry_window.py, which does the actual deletion).
+    allDepthRangesCleared = pyqtSignal(str)
+    # (sensor) - PI clicked "Clear all" for this sensor on this cast.
 
     def __init__(self, sensor: str, parent=None):
         super().__init__(parent)
@@ -152,6 +224,31 @@ class SensorRowWidget(QWidget):
         lbl_name.setFixedWidth(110)
         lbl_name.setStyleSheet("font-family: monospace;")
         header.addWidget(lbl_name)
+
+        # Depth-override count badge - the only always-visible indicator
+        # that this sensor has ANY depth-range grading on this cast.
+        # Needed because the header's "resolved:" label only ever shows
+        # the cast-level cascade result (resolved_cast_grade() correctly
+        # never resolves to "depth" at this level - see
+        # SensorRowContext.resolved_tier's own docstring), so a sensor
+        # that's Good at the cast level but has a Bad depth-range
+        # override buried inside it would otherwise be completely
+        # invisible unless every row is expanded and inspected by eye.
+        # Clicking the badge also expands the row, as a shortcut.
+        self._btn_depth_badge = QToolButton()
+        self._btn_depth_badge.setStyleSheet(
+            "QToolButton { background-color: #3b82f6; color: white; "
+            "border-radius: 8px; padding: 1px 6px; font-weight: bold; }"
+        )
+        self._btn_depth_badge.clicked.connect(lambda: self._set_expanded(True))
+        self._btn_depth_badge.setVisible(False)
+        header.addWidget(self._btn_depth_badge)
+
+        self._btn_clear_all = QPushButton("Clear all ranges")
+        self._btn_clear_all.setStyleSheet("padding: 1px 6px;")
+        self._btn_clear_all.clicked.connect(self._on_clear_all_clicked)
+        self._btn_clear_all.setVisible(False)
+        header.addWidget(self._btn_clear_all)
 
         header.addWidget(QLabel("dump:"))
         self._dump_buttons: dict[int, QPushButton] = {}
@@ -204,6 +301,18 @@ class SensorRowWidget(QWidget):
         self._strip.hoverDepthChanged.connect(self._on_hover_changed)
         depth_layout.addWidget(self._strip)
 
+        # List of this sensor's existing depth-range overrides on the
+        # current cast, one row per entry, each with its own delete
+        # button. Exists specifically so re-grading the same (or an
+        # overlapping) range doesn't silently pile up invisible dead
+        # entries - "last-applied wins" is still the resolution rule,
+        # but now the PI can SEE every entry contributing to that
+        # resolution and remove ones that are stale or mistaken.
+        self._ranges_list_layout = QVBoxLayout()
+        self._ranges_list_layout.setSpacing(1)
+        depth_layout.addLayout(self._ranges_list_layout)
+        self._range_row_widgets: list[QWidget] = []
+
         root.addWidget(self._depth_area)
         self._depth_area.setVisible(False)
 
@@ -246,6 +355,18 @@ class SensorRowWidget(QWidget):
             (r.start_depth, r.end_depth) for r in context.existing_depth_ranges
         ]
 
+        count = context.depth_override_count
+        if count > 0:
+            label = "1 depth range" if count == 1 else f"{count} depth ranges"
+            self._btn_depth_badge.setText(label)
+            self._btn_depth_badge.setVisible(True)
+            self._btn_clear_all.setVisible(True)
+        else:
+            self._btn_depth_badge.setVisible(False)
+            self._btn_clear_all.setVisible(False)
+
+        self._rebuild_ranges_list(context)
+
         self._strip.set_data(context.depth_points)
         self._strip.set_thresholds(context.thresholds)
         self._chk_thresholds.setEnabled(context.thresholds is not None)
@@ -253,6 +374,55 @@ class SensorRowWidget(QWidget):
         if self._expanded and not has_cast:
             self._set_expanded(False)
         self._btn_expand.setEnabled(has_cast)
+
+    def _rebuild_ranges_list(self, context: SensorRowContext) -> None:
+        """Rebuilds the per-range list under the strip from scratch on
+        every refresh() - simplest correct approach given how rarely
+        this changes (only when a range is added/deleted/cast changes)
+        and how few rows there ever are (depth overrides per sensor per
+        cast should be a small, human-reviewable number, not hundreds).
+        """
+        for w in self._range_row_widgets:
+            self._ranges_list_layout.removeWidget(w)
+            w.deleteLater()
+        self._range_row_widgets = []
+
+        for i, r in enumerate(context.existing_depth_ranges):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+
+            grade_label = context.quality_lookup.label(r.quality_id)
+            color = QUALITY_COLORS.get(r.quality_id, DEFAULT_QUALITY_COLOR)
+
+            lbl = QLabel(f"{r.start_depth}m\u2013{r.end_depth}m: {grade_label}")
+            lbl.setStyleSheet(f"color: {color};")
+            row_layout.addWidget(lbl)
+            row_layout.addStretch()
+
+            btn_del = QToolButton()
+            btn_del.setText("\u2715")
+            btn_del.setFixedWidth(20)
+            btn_del.clicked.connect(lambda checked=False, idx=i: self.depthRangeDeleted.emit(self.sensor, idx))
+            row_layout.addWidget(btn_del)
+
+            self._ranges_list_layout.addWidget(row_widget)
+            self._range_row_widgets.append(row_widget)
+
+    def _on_clear_all_clicked(self):
+        if self._context is None:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Clear all depth ranges",
+            f"Remove ALL depth-range grades for {self.sensor} on this cast? "
+            "This cannot be undone (though you can re-grade from scratch).",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Ok:
+            self.allDepthRangesCleared.emit(self.sensor)
 
     @staticmethod
     def _short_label(qid: int) -> str:

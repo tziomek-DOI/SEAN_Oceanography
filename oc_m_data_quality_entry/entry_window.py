@@ -1,9 +1,76 @@
 """
 entry_window.py
 OC_M Project Leader app — main window.
-Version: 2026.10.08_01
+Version: 2026.10.13_04
 
 ## ChangeLog
+
+2026.10.13_04: Wired up depth-range deletion (sensor_row_widget.py
+2026.10.13_03). _build_context_for_sensor now threads the real
+DepthRangeOverride.quality_id through onto each SensorDepthRange
+(previously only start_depth/end_depth were passed - see
+sensor_row_widget.py's matching changelog entry for why this field
+was needed). Added _on_depth_range_deleted() and
+_on_all_depth_ranges_cleared(), both connected to SensorRowWidget's new
+depthRangeDeleted/allDepthRangesCleared signals. Deletion re-maps the
+per-sensor filtered index back to the real index in CastEntry's full
+(mixed-sensor) depth_overrides list before removing, since that list -
+not any per-sensor view of it - is what's actually mutated.
+
+2026.10.13_03: Fixed validator false-positive: CastEntry.comment had no
+UI control anywhere - the only comment box that existed was
+DumpEntry.analyst_comments ("Analyst's comments," explicitly scoped as
+dump-level and not-applied-to-the-database). validate_submission()
+checks CastEntry.comment, so nothing the PI typed could ever satisfy
+it. Added a per-cast comment box between the dump header and the
+sensor-row stack, wired to CastEntry.comment via _on_cast_comment_
+changed(), populated/cleared on cast selection via
+_refresh_cast_comment_box().
+
+2026.10.13_02: Fixed KeyError crash on dump-level and cast-level grade
+button clicks. _build_ui()'s dumpGradeChanged/castGradeChanged lambda
+connections declared only one parameter (qid) against signals that
+emit TWO arguments (sensor, quality_id_or_None) - see sensor_row_
+widget.py's SensorRowWidget signal declarations. This caused the
+signal's own sensor-name argument to collide with the quality_id
+argument, so self._sensor_rows[sensor] was indexed with an integer
+quality id (e.g. 4) instead of a sensor name string, raising
+KeyError: 4. Fixed by declaring both signal arguments explicitly in
+each lambda, matching the safer pattern depthRangeGraded's lambda
+already used (no default-value capture in place of a real parameter).
+
+2026.10.13_01: Single-file architecture pivot (see output_io.py's
+matching changelog entry for the full rationale). This window no longer
+keeps a separate self._preload_payload dict around as a second source
+of truth for cast readings - OCMSubmission.load() is now the only load
+path, and CastEntry itself holds depths/readings directly. This removes
+_find_cast_payload() and the debug-print instrumentation that was added
+to chase the "no graphs showing" bug - that bug's root cause (two
+sources of cast data that could silently fall out of sync) no longer
+exists as a possible state, since there is only one source now.
+
+self._preload_payload is still stored and still used for genuinely
+payload-level (not per-cast) facts: building the QualityLookup, reading
+graded_sensors, and ThresholdBounds.from_preload_payload() per-sensor
+lookups (thresholds are a static per-sensor fact from tbl_threshold,
+not something that varies per cast or changes as the PI grades, so
+reading it straight from the payload here is correct and unrelated to
+the readings-desync bug this pivot fixes). It is explicitly NOT used
+for cast READINGS anymore - self._submission's CastEntry objects are
+now the only source for depths/readings, replacing the old
+_find_cast_payload()/raw-dict lookup that caused the prior session's
+"no graphs showing" bug.
+
+_build_depth_points() now reads straight from the CURRENT CastEntry
+(self._current_cast_entry().depths / .readings[sensor]) instead of
+looking up a raw dict by year/dump/cast - this is strictly simpler
+than before and cannot desync from what the PI is actually viewing,
+since there is exactly one CastEntry object per cast and it's the same
+object the tree/grade-change handlers already mutate directly.
+
+_open_filepath() no longer calls restrict_onto_preload_shell() (removed
+from output_io.py in this pivot) - it calls OCMSubmission.load()
+directly and uses the result as-is.
 
 2026.10.08_01: Per-sensor, per-depth grading redesign. REPLACES the old
 single-code-per-cast grid (Cast | Quality code | Comment) and the
@@ -15,12 +82,6 @@ Defective-sensor checkboxes are also retired - per developer decision,
 "sensor X defective for this dump" and "sensor X graded Bad for this
 dump" are the same action now, both expressed through the new
 dump-level grade buttons on that sensor's row.
-
-preload_model.py's DumpCastTableModel/QualityCodeDelegate/
-CommentDelegate are no longer imported anywhere in this file as of this
-version - preload_model.py can now be safely deleted (nothing else in
-this app imports it either; it was only ever used by the grid this
-version replaces).
 
 Ownership/refresh model: this window owns the live OCMSubmission and
 the current cast selection. Each SensorRowWidget is a stateless view;
@@ -34,9 +95,9 @@ since each sensor's cascade is entirely independent).
 QualityLookup and the graded-sensor list are built ONCE at window
 construction, from the pre-loader JSON payload (preload_payload[
 "graded_sensors"], preload_payload["data_quality_ids"]) - never
-hand-typed here. validate_submission() now requires graded_sensors and
-good_id as explicit arguments (see output_io.py's 2026-10-08 fix); both
-are threaded through from the same source.
+hand-typed here. validate_submission() requires graded_sensors and
+good_id as explicit arguments; both are threaded through from the same
+source.
 
 Layout: sized for a maximized 14-15" laptop at minimum (per developer
 confirmation - the PI is expected to run this maximized, same as the
@@ -132,13 +193,23 @@ class OCMEntryWindow(QMainWindow):
         self.setWindowTitle("Oceanographic Survey Data Quality Report (OC-M)")
         self.resize(1400, 900)  # sized for a maximized 14-15" laptop; fully resizable
 
-        self._preload_payload = preload_payload
         self._default_output_dir = default_output_dir
 
+        # NOTE (2026.10.13_01): preload_payload is read ONCE here for
+        # the two payload-level facts that aren't per-cast (the quality
+        # lookup table and the graded-sensor list). It is deliberately
+        # NOT stored on self anymore - there is no per-cast code path
+        # that should ever reach back into a raw payload dict; cast data
+        # (readings/depths) now lives directly on each CastEntry inside
+        # self._submission. Keeping a stored self._preload_payload
+        # around was the root cause of the prior session's "no graphs
+        # showing" bug (see output_io.py's 2026.10.13_01 changelog) -
+        # don't reintroduce it.
         self._quality_lookup = QualityLookup.from_preload_payload(preload_payload)
         self._graded_sensors: list[str] = preload_payload.get("graded_sensors", [])
+        self._preload_payload = preload_payload  # still needed by ThresholdBounds.from_preload_payload() per-sensor lookups
 
-        self._submission = OCMSubmission.new_from_preload(preload_payload)
+        self._submission = OCMSubmission.from_payload(preload_payload)
 
         self._current_year: str | None = None
         self._current_dump: str | None = None
@@ -161,7 +232,7 @@ class OCMEntryWindow(QMainWindow):
         self._apply_saved_style_preference()
         self._populate_tree()
 
-    # ------------------------------------------------------------------
+# ------------------------------------------------------------------
     def _build_ui(self):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -204,6 +275,24 @@ class OCMEntryWindow(QMainWindow):
         meta_row.addStretch()
         right_layout.addLayout(meta_row)
 
+        # Per-CAST comment (distinct from the per-DUMP "Analyst's
+        # comments" box further down). This is the field
+        # validate_submission() actually checks - a cast with any
+        # sensor graded non-Good (cast-level or depth-level) requires
+        # a non-empty comment HERE, not in Analyst's comments. See
+        # output_io.py's CastProblem/validate_submission.
+        cast_comment_group = QWidget()
+        cast_comment_layout = QVBoxLayout(cast_comment_group)
+        cast_comment_layout.setContentsMargins(0, 0, 0, 0)
+        cast_comment_layout.addWidget(
+            QLabel("Cast comment (required if any sensor is graded non-Good):")
+        )
+        self._txt_cast_comment = QPlainTextEdit()
+        self._txt_cast_comment.setMaximumHeight(50)
+        self._txt_cast_comment.textChanged.connect(self._on_cast_comment_changed)
+        cast_comment_layout.addWidget(self._txt_cast_comment)
+        right_layout.addWidget(cast_comment_group)
+
         # Scroll area wrapping all 9 sensor rows - safety net for smaller
         # displays/higher DPI, not the primary interaction model (a
         # maximized 14-15" laptop should show all 9 without scrolling).
@@ -216,13 +305,19 @@ class OCMEntryWindow(QMainWindow):
         for sensor in self._graded_sensors:
             row = SensorRowWidget(sensor)
             row.dumpGradeChanged.connect(
-                lambda qid, s=sensor: self._on_dump_grade_changed(s, qid)
+                lambda _sensor_arg, qid, s=sensor: self._on_dump_grade_changed(s, qid)
             )
             row.castGradeChanged.connect(
-                lambda qid, s=sensor: self._on_cast_grade_changed(s, qid)
+                lambda _sensor_arg, qid, s=sensor: self._on_cast_grade_changed(s, qid)
             )
             row.depthRangeGraded.connect(
                 lambda s, start, end, qid: self._on_depth_range_graded(s, start, end, qid)
+            )
+            row.depthRangeDeleted.connect(
+                lambda s, idx: self._on_depth_range_deleted(s, idx)
+            )
+            row.allDepthRangesCleared.connect(
+                lambda s: self._on_all_depth_ranges_cleared(s)
             )
             self._sensor_rows[sensor] = row
             rows_layout.addWidget(row)
@@ -299,9 +394,8 @@ class OCMEntryWindow(QMainWindow):
         """Called once at startup, after the menu exists (so the
         checkable action's state can be set to match). Applies whatever
         style_mode was persisted from a prior session - defaults to
-        STYLE_MODE_NONE (no stylesheet, Qt native/OS theme) on a
-        genuinely first-ever launch, per explicit developer
-        instruction."""
+        no stylesheet (Qt native/OS theme) on a genuinely first-ever
+        launch, per explicit developer instruction."""
         mode = self._app_settings.style_mode
         if mode == STYLE_MODE_SHARED:
             self._set_stylesheet_from_path(_SHARED_STYLES_PATH, persist=False)
@@ -461,6 +555,10 @@ class OCMEntryWindow(QMainWindow):
         self._txt_analyst_comments.blockSignals(True)
         self._txt_analyst_comments.clear()
         self._txt_analyst_comments.blockSignals(False)
+        self._txt_cast_comment.blockSignals(True)
+        self._txt_cast_comment.clear()
+        self._txt_cast_comment.setEnabled(False)
+        self._txt_cast_comment.blockSignals(False)
         self._refresh_all_sensor_rows()
 
     # ------------------------------------------------------------------
@@ -498,11 +596,26 @@ class OCMEntryWindow(QMainWindow):
             self._cast_tree.setCurrentItem(first_cast_item)
             self._current_cast = first_cast_item.data(0, Qt.ItemDataRole.UserRole)
 
+        self._refresh_cast_comment_box()
         self._refresh_all_sensor_rows()
 
     def _on_cast_item_clicked(self, item: QTreeWidgetItem, _col: int):
         self._current_cast = item.data(0, Qt.ItemDataRole.UserRole)
+        self._refresh_cast_comment_box()
         self._refresh_all_sensor_rows()
+
+    def _refresh_cast_comment_box(self):
+        cast_entry = self._current_cast_entry()
+        self._txt_cast_comment.blockSignals(True)
+        self._txt_cast_comment.setPlainText(cast_entry.comment if cast_entry and cast_entry.comment else "")
+        self._txt_cast_comment.setEnabled(cast_entry is not None)
+        self._txt_cast_comment.blockSignals(False)
+
+    def _on_cast_comment_changed(self):
+        cast_entry = self._current_cast_entry()
+        if cast_entry is None:
+            return
+        cast_entry.comment = self._txt_cast_comment.toPlainText()
 
     # ------------------------------------------------------------------
     def _current_dump_entry(self) -> DumpEntry | None:
@@ -547,14 +660,16 @@ class OCMEntryWindow(QMainWindow):
             if cast_entry is not None:
                 cast_grade = cast_entry.sensor_cast_grades.get(sensor)
                 existing_ranges = [
-                    SensorDepthRange(start_depth=o.start_depth, end_depth=o.end_depth)
+                    SensorDepthRange(
+                        start_depth=o.start_depth, end_depth=o.end_depth, quality_id=o.quality_id
+                    )
                     for o in cast_entry.depth_overrides
                     if o.sensor == sensor
                 ]
             resolved_id, resolved_tier = dump_entry.resolved_cast_grade(
                 sensor, self._current_cast, self._quality_lookup.good_id
             )
-            depth_points = self._build_depth_points(sensor, dump_entry, self._current_cast)
+            depth_points = self._build_depth_points(sensor, cast_entry)
 
         return SensorRowContext(
             sensor=sensor,
@@ -569,56 +684,33 @@ class OCMEntryWindow(QMainWindow):
             has_cast_selected=has_cast,
         )
 
-    def _build_depth_points(self, sensor: str, dump_entry: DumpEntry, cast: str) -> list[ResolvedDepthPoint]:
+    def _build_depth_points(self, sensor: str, cast_entry: CastEntry | None) -> list[ResolvedDepthPoint]:
         """Builds the resolved per-depth series for one sensor/cast,
-        combining the ORIGINAL readings from the pre-load payload (this
-        window's only source for the raw trace - output_io.py's
-        CastEntry never stores readings, only grade overrides) with the
-        CURRENT resolved grade from the submission's live override
-        cascade (which may differ from the payload's original
-        general_grades/depth_grades if the PI has made changes this
-        session)."""
-        # TODO: Remove debug print statements after fix(es).
-        print(f"DEBUG: self._current_year={self._current_year!r} (type {type(self._current_year)})")
-        print(f"DEBUG: self._current_dump={self._current_dump!r} (type {type(self._current_dump)})")
-        cast_payload = self._find_cast_payload(cast)
-        print(
-            f"DEBUG: year={self._current_year!r} dump={self._current_dump!r} cast={cast!r} -> found: {cast_payload is not None}")
-        if cast_payload is None:
-            for cy in self._preload_payload.get("cruise_years", []):
-                print(
-                    f"DEBUG: comparing cy['cruise_year']={cy['cruise_year']!r} to self._current_year={self._current_year!r} -> equal: {cy['cruise_year'] == self._current_year}")
-                for d in cy.get("dumps", []):
-                    print(f"DEBUG:     payload has dump={d['dump']!r}, cast keys={list(d.get('casts', {}).keys())!r}")
+        reading depths/readings directly off the CastEntry that is
+        already this window's single source of truth for the current
+        cast (2026.10.13_01 - previously this re-looked-up a raw
+        pre-loader payload dict by year/dump/cast via
+        _find_cast_payload(), which is what let the payload and the
+        submission fall out of sync in the prior session's "no graphs
+        showing" bug; that lookup no longer exists anywhere in this
+        file)."""
+        if cast_entry is None:
             return []
 
-        depths = cast_payload.get("depths", [])
-        readings = cast_payload.get("readings", {}).get(sensor, [])
+        dump_entry = self._current_dump_entry()
+        depths = cast_entry.depths
+        readings = cast_entry.readings.get(sensor, [])
 
         points = []
         for i, depth in enumerate(depths):
             reading = readings[i] if i < len(readings) else None
             quality_id, tier = dump_entry.resolved_depth_grade(
-                sensor, cast, depth, self._quality_lookup.good_id
+                sensor, self._current_cast, depth, self._quality_lookup.good_id
             )
             points.append(ResolvedDepthPoint(
                 depth=depth, reading=reading, quality_id=quality_id, tier=tier
             ))
         return points
-
-    def _find_cast_payload(self, cast: str) -> dict | None:
-        # TODO: Remove debug prints after fix
-        print(f"DEBUG: preload_payload has {len(self._preload_payload.get('cruise_years', []))} cruise_year entries")
-
-        for cy in self._preload_payload.get("cruise_years", []):
-            print(f"DEBUG: cy keys = {list(cy.keys())}, cy['cruise_year'] = {cy.get('cruise_year')!r}")
-            if cy["cruise_year"] != self._current_year:
-                continue
-            for d in cy.get("dumps", []):
-                if d["dump"] != self._current_dump:
-                    continue
-                return d.get("casts", {}).get(cast)
-        return None
 
     def _refresh_all_sensor_rows(self):
         for sensor, row in self._sensor_rows.items():
@@ -657,6 +749,35 @@ class OCMEntryWindow(QMainWindow):
                 sensor=sensor, start_depth=start_depth, end_depth=end_depth, quality_id=quality_id
             )
         )
+        self._refresh_one_sensor_row(sensor)
+
+    def _on_depth_range_deleted(self, sensor: str, index: int):
+        """index is positional within THIS sensor's filtered view of
+        depth_overrides, as built by _build_context_for_sensor's
+        existing_ranges list comprehension (same filter, same order:
+        iterate cast_entry.depth_overrides in list order, keep only
+        this sensor's entries). We must re-derive the REAL index into
+        the full, mixed-sensor depth_overrides list here, since that's
+        the actual list being mutated."""
+        cast_entry = self._current_cast_entry()
+        if cast_entry is None:
+            return
+        this_sensor_indices = [
+            i for i, o in enumerate(cast_entry.depth_overrides) if o.sensor == sensor
+        ]
+        if index >= len(this_sensor_indices):
+            return  # stale index (shouldn't normally happen - refresh() rebuilds after every change)
+        real_index = this_sensor_indices[index]
+        del cast_entry.depth_overrides[real_index]
+        self._refresh_one_sensor_row(sensor)
+
+    def _on_all_depth_ranges_cleared(self, sensor: str):
+        cast_entry = self._current_cast_entry()
+        if cast_entry is None:
+            return
+        cast_entry.depth_overrides = [
+            o for o in cast_entry.depth_overrides if o.sensor != sensor
+        ]
         self._refresh_one_sensor_row(sensor)
 
     def _on_analyst_comments_changed(self):
@@ -724,13 +845,12 @@ class OCMEntryWindow(QMainWindow):
     def _open_filepath(self, filepath: str):
         try:
             loaded = OCMSubmission.load(filepath)
-            restricted = loaded.restrict_onto_preload_shell(self._preload_payload)
         except Exception as exc:
             self._show_error_dialog("Open failed", filepath, exc)
             return
 
         self._last_save_dir = os.path.dirname(filepath)
-        self._submission = restricted
+        self._submission = loaded
         self._current_filepath = filepath
         self._current_filename = os.path.basename(filepath)
         self._lbl_open_file.setText(f"Open file: {self._current_filename}")
