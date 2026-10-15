@@ -1,0 +1,12 @@
+│── oc_m_data_quality_entry/              # A standalone app which shares some library and style code, but is meant to be deployed separately.
+│   ├── main.py                <- entry point; nested ONE level below repo root
+│   ├── version.py             <- already a structured VersionInfo dataclass (done)
+│   ├── entry_window.py
+│   ├── output_io.py
+│   ├── preload_model.py
+│   ├── recent_files.py
+│   └── docs/
+│   	├── about.md
+│   	└── SEAN OC SOP 11 Data Quality Assignment (OC_M Creation) version 3.pdf
+│   └── data/
+│   	└── recent_files.json  <- auto-created at runtime

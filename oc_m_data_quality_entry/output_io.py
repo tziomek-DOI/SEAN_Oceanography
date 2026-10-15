@@ -1,9 +1,14 @@
 """
 output_io.py
 OC_M Project Leader app — output file I/O and validation.
-Version: 2026.10.13_01
+Version: 2026.10.13_02
 
 ## ChangeLog
+
+2026.10.13_02: Added CastEntry.station (read-only, DB-sourced) -
+round-tripped through to_json_payload()/from_payload() the same way
+depths/readings are. Needed so entry_window.py's cast list can show
+the station alongside the cast number.
 
 2026.10.13_01: Single-file architecture pivot. REPLACES the two-file
 (pre-loader snapshot + PI delta) design with one JSON structure used for
@@ -113,6 +118,11 @@ class DepthRangeOverride:
 @dataclass
 class CastEntry:
     cast: str
+    # Read-only, DB-sourced - never edited by the PI, never written
+    # back with a different value than what was loaded. Added
+    # 2026.10.14 so the cast list can show "Cast xx - Station yy"
+    # instead of just the cast number.
+    station: str | None = None
     # UNCHANGED from the original design, per explicit developer
     # instruction - one free-text comment per cast remains sufficient;
     # no per-sensor or per-depth comment fields are being added.
@@ -229,6 +239,7 @@ class OCMSubmission:
                 casts_out = {}
                 for cast, c in sorted(d.casts.items()):
                     casts_out[cast] = {
+                        "station": c.station,
                         "depths": list(c.depths),
                         "readings": {s: list(v) for s, v in c.readings.items()},
                         "comment": c.comment,
@@ -298,6 +309,7 @@ class OCMSubmission:
                 for cast, c in d.get("casts", {}).items():
                     dump_entry.casts[cast] = CastEntry(
                         cast=cast,
+                        station=c.get("station"),
                         depths=list(c.get("depths", [])),
                         readings={s: list(v) for s, v in c.get("readings", {}).items()},
                         comment=c.get("comment"),

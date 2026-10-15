@@ -332,6 +332,13 @@ class SensorRowWidget(QWidget):
         self._depth_area.setVisible(False)
 
     # ------------------------------------------------------------------
+    def set_show_tooltips(self, show: bool) -> None:
+        """Passthrough to the embedded DepthStripWidget - keeps
+        entry_window.py's Settings-menu handler from reaching into
+        self._strip directly, preserving this widget's existing
+        encapsulation of its internal DepthStripWidget."""
+        self._strip.set_show_tooltips(show)
+
     def refresh(self, context: SensorRowContext) -> None:
         """Re-render this row from a fresh snapshot. Called by the
         caller any time this sensor's displayed state could have

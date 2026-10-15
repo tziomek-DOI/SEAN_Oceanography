@@ -1,9 +1,15 @@
 """
 app_settings.py
 OC_M Project Leader app — small persisted application settings.
-Version: 2026.10.08_01
+Version: 2026.10.14_01
 
 ## ChangeLog
+
+2026.10.14_01: Added show_depth_tooltips (default True) - persisted
+toggle for the depth-strip's cursor-pinned QToolTip (see
+depth_strip_widget.py's 2026.10.14 changelog). Same persistence
+pattern as style_mode: loaded with a default in __init__, written via
+_save() alongside the existing fields, no separate file/schema.
 
 2026.10.08_01: Initial version. Currently holds only the stylesheet
 preference (whether to use the shared dm_tools stylesheet, or a custom
@@ -35,6 +41,10 @@ class AppSettings:
         data = self._load()
         self.style_mode: str = data.get("style_mode", STYLE_MODE_NONE)
         self.custom_style_path: str | None = data.get("custom_style_path")
+        # Depth-strip hover tooltip (2026.10.14) - default True, matching
+        # the always-on behavior before this toggle existed, so existing
+        # users see no behavior change until they explicitly turn it off.
+        self.show_depth_tooltips: bool = data.get("show_depth_tooltips", True)
 
     def _load(self) -> dict:
         if not self._settings_path.is_file():
@@ -55,12 +65,17 @@ class AppSettings:
                 json.dump({
                     "style_mode": self.style_mode,
                     "custom_style_path": self.custom_style_path,
+                    "show_depth_tooltips": self.show_depth_tooltips,
                 }, fh, indent=2)
         except OSError:
             # Settings persistence is a convenience, not core
             # functionality - a write failure here should never
             # interrupt the PI's actual grading workflow.
             pass
+
+    def set_show_depth_tooltips(self, show: bool):
+        self.show_depth_tooltips = show
+        self._save()
 
     def set_none(self):
         self.style_mode = STYLE_MODE_NONE

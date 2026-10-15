@@ -218,6 +218,7 @@ class DepthStripWidget(QWidget):
         self._hover_idx: int | None = None
         self._thresholds: ThresholdBounds | None = None
         self._show_thresholds: bool = False
+        self._show_tooltips: bool = True
         self.setMouseTracking(True)
         self.setMinimumHeight(self.STRIP_HEIGHT)
 
@@ -235,6 +236,14 @@ class DepthStripWidget(QWidget):
         and the resulting paint behavior."""
         self._show_thresholds = show
         self.update()
+
+    def set_show_tooltips(self, show: bool) -> None:
+        """Toggled by the caller's own Settings-menu action (2026.10.14) -
+        same ownership pattern as set_show_thresholds(): this widget owns
+        no UI control for the toggle itself, only the on/off state."""
+        self._show_tooltips = show
+        if not show:
+            QToolTip.hideText()
 
     # ------------------------------------------------------------------
     def set_data(self, points: list[ResolvedDepthPoint]) -> None:
@@ -398,7 +407,8 @@ class DepthStripWidget(QWidget):
         # regardless of scroll offset. Shown on every move (not just on
         # idx change) so it follows the cursor smoothly within one depth
         # cell, matching normal tooltip behavior.
-        QToolTip.showText(event.globalPosition().toPoint(), self._tooltip_text_for(idx), self)
+        if self._show_tooltips:
+            QToolTip.showText(event.globalPosition().toPoint(), self._tooltip_text_for(idx), self)
 
         if self._drag_start_idx is not None:
             self._drag_end_idx = idx
