@@ -1,12 +1,12 @@
 {
-  "generated_date": "2026-10-08T00:00:00",
+  "generated_date": "2026-10-14T00:00:00",
   "start_year": "",
   "end_year": "",
   "data_quality_ids": [
-    {"id": 1, "code": "0", "label": "Good"},
-    {"id": 2, "code": "1", "label": "Unknown"},
-    {"id": 3, "code": "4", "label": "Questionable"},
-    {"id": 4, "code": "8", "label": "Bad"}
+    {"id": 1, "code": "0", "label": "Good", "severity_order": 1},
+    {"id": 2, "code": "1", "label": "Unknown", "severity_order": 2},
+    {"id": 3, "code": "4", "label": "Questionable", "severity_order": 3},
+    {"id": 4, "code": "8", "label": "Bad", "severity_order": 4}
   ],
   "thresholds": [
     {"parameter": "sigma_t", "mand_min": 0, "mand_max": 30, "opt_min": 15, "opt_max": 27, "units": "kg/m^3"},

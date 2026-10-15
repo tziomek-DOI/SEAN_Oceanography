@@ -5,6 +5,21 @@ Version: 2026.10.13_03
 
 ## ChangeLog
 
+2026.10.14_01: Added a grading floor for depth-range overrides, per
+developer request: a sensor's depth-range grade can never be BETTER
+than that sensor's current cast-level resolved grade (cast override,
+or falling through to dump-level override, or Good) - only equal or
+worse is allowed. Enforced by omitting (not merely disabling) any
+better-than-floor option from _GradePickerDialog's button row, so nothing
+invalid can be clicked. The floor is read from SensorRowContext.resolved_id
+at the moment a range is completed - already guaranteed current by the
+existing refresh-on-every-grade-change discipline, so no new state
+tracking was needed. Deliberately NOT retroactive: an existing depth
+override that predates a later, stricter cast/dump grade is left as-is
+(same "don't rewrite history" principle already applied to overlapping
+depth ranges) - the floor only constrains NEW picker choices going
+forward.
+
 2026.10.13_03: Added a visible per-range list under each sensor's depth
 strip (one row per existing_depth_ranges entry: "start-end: grade",
 each with its own delete button), plus a "Clear all ranges" button -
@@ -399,13 +414,14 @@ class SensorRowWidget(QWidget):
             lbl = QLabel(f"{r.start_depth}m\u2013{r.end_depth}m: {grade_label}")
             lbl.setStyleSheet(f"color: {color};")
             row_layout.addWidget(lbl)
-            row_layout.addStretch()
 
             btn_del = QToolButton()
             btn_del.setText("\u2715")
             btn_del.setFixedWidth(20)
             btn_del.clicked.connect(lambda checked=False, idx=i: self.depthRangeDeleted.emit(self.sensor, idx))
             row_layout.addWidget(btn_del)
+
+            row_layout.addStretch()
 
             self._ranges_list_layout.addWidget(row_widget)
             self._range_row_widgets.append(row_widget)
@@ -491,7 +507,23 @@ class SensorRowWidget(QWidget):
             if reply != QMessageBox.StandardButton.Ok:
                 return
 
-        picker = _GradePickerDialog(self.sensor, start_depth, end_depth, self)
+        floor_quality_id = self._context.resolved_id
+        lookup = self._context.quality_lookup
+        floor_severity = lookup.severity(floor_quality_id)
+        worst_severity = max(lookup.severity(qid) for qid in lookup.ids_sorted_by_severity())
+        if floor_severity >= worst_severity:
+            QMessageBox.information(
+                self, "Nothing worse to grade",
+                f"{self.sensor} is already graded {lookup.label(floor_quality_id)} "
+                "at the cast/dump level - there is no worse grade available "
+                "to assign to a depth range."
+            )
+            return
+
+        picker = _GradePickerDialog(
+            self.sensor, start_depth, end_depth,
+            floor_quality_id, lookup, self
+        )
         if picker.exec():
             self.depthRangeGraded.emit(self.sensor, start_depth, end_depth, picker.chosen_quality_id)
 
@@ -499,17 +531,41 @@ class SensorRowWidget(QWidget):
 class _GradePickerDialog(QMessageBox):
     """Minimal grade-choice prompt for a completed depth-range drag.
     Deliberately plain (QMessageBox-derived button row) rather than a
-    custom dialog - four buttons, no other content needed."""
+    custom dialog - four buttons, no other content needed.
 
-    def __init__(self, sensor: str, start_depth: int, end_depth: int, parent=None):
+    floor_quality_id enforces the "depth grade cannot be BETTER than
+    the sensor's current cast-level resolved grade" rule (2026.10.14) -
+    any quality id with LOWER severity than the floor (i.e. numerically
+    less, since severity is 1=Good < 2=Unknown < 3=Questionable
+    4=Bad) is omitted from the button row entirely, not merely
+    disabled, so there's nothing to click that would violate the rule.
+    The floor itself is always the sensor's CURRENT cast-level resolved
+    grade (DumpEntry.resolved_cast_grade's output, threaded through via
+    SensorRowContext.resolved_id) - never relative to other existing
+    depth ranges, and never retroactively re-checked against ranges
+    created before the floor changed (see output_io.py/entry_window.py
+    changelog for the "don't retroactively rewrite" rationale, same
+    principle applied here)."""
+
+    def __init__(self, sensor: str, start_depth: int, end_depth: int,
+                 floor_quality_id: int, quality_lookup, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Grade depth range")
-        self.setText(f"Grade {sensor} for depth {start_depth}m\u2013{end_depth}m:")
+        floor_label = quality_lookup.label(floor_quality_id)
+        floor_severity = quality_lookup.severity(floor_quality_id)
+        self.setText(
+            f"Grade {sensor} for depth {start_depth}m\u2013{end_depth}m:\n\n"
+            f"(This sensor is currently graded {floor_label} at the cast/dump "
+            f"level - grading a depth range to {floor_label} again would be "
+            f"redundant, so only grades WORSE than {floor_label} are offered.)"
+        )
         self.chosen_quality_id: int | None = None
 
         self._buttons_by_id = {}
-        for qid, label in ((1, "Good"), (2, "Unknown"), (3, "Questionable"), (4, "Bad")):
-            btn = self.addButton(label, QMessageBox.ButtonRole.ActionRole)
+        for qid in quality_lookup.ids_sorted_by_severity():
+            if quality_lookup.severity(qid) <= floor_severity:
+                continue  # equal-to-or-better-than the floor - redundant, not offered
+            btn = self.addButton(quality_lookup.label(qid), QMessageBox.ButtonRole.ActionRole)
             self._buttons_by_id[btn] = qid
         self.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
 

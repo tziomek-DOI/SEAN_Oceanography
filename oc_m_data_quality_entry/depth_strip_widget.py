@@ -1,7 +1,25 @@
 """
 depth_strip_widget.py
 OC_M Project Leader app — depth-strip widget.
-Version: 2026.10.08_04
+Version: 2026.10.08_05
+
+## ChangeLog
+
+2026.10.14_05: Added a cursor-pinned QToolTip in mouseMoveEvent, per
+developer report: the persistent hover label (maintained by the
+caller, SensorRowWidget._lbl_hover) is pinned at a fixed layout
+position and becomes invisible once a wide depth strip (300+m casts
+are real, confirmed by the developer) is scrolled horizontally within
+the app's outer QScrollArea - the label scrolls out of the viewport
+while the strip itself remains visible and draggable. QToolTip follows
+the cursor directly via screen coordinates, so it's immune to any
+ancestor's scroll position. Deliberately depth/reading/tier only, not
+the full quality LABEL text - adding that would require threading a
+QualityLookup into this widget, which this module's docstring
+explicitly avoids (no grading/cascade knowledge). The existing
+_lbl_hover label (full label text, via SensorRowWidget) is retained
+unchanged, per developer instruction - this is additive, not a
+replacement.
 
 2026.10.08_02: QUALITY_COLORS/QualityLookup split out - labels and the
 Good-id now come from the pre-loader JSON's real OC.tbl_data_quality
@@ -66,7 +84,7 @@ from dataclasses import dataclass
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QToolTip, QWidget
 
 # UI-only styling - no database column says what color represents Bad.
 QUALITY_COLORS: dict[int, str] = {
@@ -80,28 +98,56 @@ DEFAULT_QUALITY_COLOR = "#777777"  # fallback if an id has no color entry
 
 @dataclass
 class QualityLookup:
-    """Id -> label, and which id means "Good" - both read from the
-    pre-loader JSON's "data_quality_ids" list (a live OC.tbl_data_quality
-    query; see oc_m_preloader_service._fetch_data_quality_table()).
-    Built once by the caller (entry_window.py) and shared wherever a
-    label or the Good-id is needed."""
+    """Id -> label, id -> severity_order, and which id means "Good" -
+    all read from the pre-loader JSON's "data_quality_ids" list (a live
+    OC.tbl_data_quality query; see
+    oc_m_preloader_service._fetch_data_quality_table()). Built once by
+    the caller (entry_window.py) and shared wherever a label, a
+    severity comparison, or the Good-id is needed.
+
+    severity_order (2026.10.14) replaces the earlier assumption that
+    numeric id order IS severity order - that assumption was a real,
+    confirmed fragility (nothing guaranteed id 1 < id 2 meant "better
+    than," it just happened to be true for the 4 original rows) and is
+    now an explicit, DB-driven, independently-editable column instead.
+    Lower severity_order = better grade (e.g. Good=1, Bad=4, by
+    convention - but this module makes no assumption about the actual
+    numbers beyond "lower sorts better"; it never hardcodes which id
+    means what severity)."""
     label_by_id: dict[int, str]
+    severity_by_id: dict[int, int]
     good_id: int
 
     @classmethod
     def from_preload_payload(cls, preload_payload: dict) -> "QualityLookup":
         rows = preload_payload.get("data_quality_ids", [])
         label_by_id = {r["id"]: r["label"] for r in rows}
+        severity_by_id = {r["id"]: r["severity_order"] for r in rows}
         good_rows = [r["id"] for r in rows if r.get("code") == "0"]
         if not good_rows:
             raise ValueError(
                 "No row with data_quality_code == '0' (Good) found in "
                 "data_quality_ids - cannot determine the Good id."
             )
-        return cls(label_by_id=label_by_id, good_id=good_rows[0])
+        return cls(label_by_id=label_by_id, severity_by_id=severity_by_id, good_id=good_rows[0])
 
     def label(self, quality_id: int) -> str:
         return self.label_by_id.get(quality_id, f"Unknown (id={quality_id})")
+
+    def severity(self, quality_id: int) -> int:
+        """Lower = better. Raises KeyError if quality_id isn't a real
+        id from this payload - deliberately NOT defaulted, since a
+        missing severity is a real data problem (an id with no
+        corresponding tbl_data_quality row/severity_order), not a case
+        to paper over with a guessed fallback."""
+        return self.severity_by_id[quality_id]
+
+    def ids_sorted_by_severity(self) -> list[int]:
+        """All known quality ids, best-to-worst. Replaces any
+        hardcoded (1, 2, 3, 4)-style tuple - this is the one place
+        that should ever need to enumerate "all grades in order," and
+        it's always DB-driven."""
+        return sorted(self.severity_by_id.keys(), key=lambda qid: self.severity_by_id[qid])
 
 
 @dataclass
@@ -343,6 +389,17 @@ class DepthStripWidget(QWidget):
             self._hover_idx = idx
             self.hoverDepthChanged.emit(self._points[idx].depth)
 
+        # Cursor-pinned tooltip (2026.10.14) - the persistent hover label
+        # this widget's caller maintains (SensorRowWidget._lbl_hover) is
+        # pinned at a fixed layout position and goes out of view once a
+        # wide (300m+) strip is scrolled horizontally within the app's
+        # outer QScrollArea. QToolTip tracks the cursor directly and is
+        # immune to any ancestor's scroll position, so it stays usable
+        # regardless of scroll offset. Shown on every move (not just on
+        # idx change) so it follows the cursor smoothly within one depth
+        # cell, matching normal tooltip behavior.
+        QToolTip.showText(event.globalPosition().toPoint(), self._tooltip_text_for(idx), self)
+
         if self._drag_start_idx is not None:
             self._drag_end_idx = idx
             self.update()
@@ -362,7 +419,21 @@ class DepthStripWidget(QWidget):
     def leaveEvent(self, event) -> None:
         self._hover_idx = None
         self.hoverDepthChanged.emit(None)
+        QToolTip.hideText()
         self.update()
+
+    def _tooltip_text_for(self, idx: int) -> str:
+        """Depth/reading/tier only - deliberately NOT the human quality
+        LABEL (e.g. "Questionable"), since that requires a QualityLookup
+        this widget intentionally has no dependency on (see this
+        module's own docstring on staying free of grading/cascade
+        knowledge). The persistent _lbl_hover label the caller maintains
+        already shows the full label; this tooltip exists only to keep
+        SOME readout visible when that label scrolls out of view, not to
+        duplicate it exactly."""
+        p = self._points[idx]
+        reading_str = f"{p.reading:.3f}" if p.reading is not None else "(no reading)"
+        return f"{p.depth}m \u2014 {reading_str} ({p.tier})"
 
     # ------------------------------------------------------------------
     def sizeHint(self):
