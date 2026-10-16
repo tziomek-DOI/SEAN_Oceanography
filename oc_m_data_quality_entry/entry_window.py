@@ -1,9 +1,20 @@
 """
 entry_window.py
 OC_M Project Leader app — main window.
-Version: 2026.10.13_05
+Version: 2026.10.16_01
 
 ## ChangeLog
+
+2026.10.16_01: Removed the now-dead depthRangeDeleted connection and
+_on_depth_range_deleted() - sensor_row_widget.py no longer emits that
+signal (replaced by the summary-count readout, 2026.10.16). Added the
+missing depthRangeReset connection and _on_depth_range_reset(), which
+had been emitted since sensor_row_widget.py's "Reset to cast grade"
+feature but was never wired up here - clicking it did nothing until
+now. Removes only depth_overrides entries ENTIRELY contained within
+the reset range; partially-overlapping overrides are left untouched
+(no splitting), consistent with this project's existing
+don't-retroactively-rewrite principle.
 
 2026.10.13_05: Cast list now shows "Cast xx - Station yy" instead of
 just "Cast xx", using the new CastEntry.station field (output_io.py
@@ -320,8 +331,8 @@ class OCMEntryWindow(QMainWindow):
             row.depthRangeGraded.connect(
                 lambda s, start, end, qid: self._on_depth_range_graded(s, start, end, qid)
             )
-            row.depthRangeDeleted.connect(
-                lambda s, idx: self._on_depth_range_deleted(s, idx)
+            row.depthRangeReset.connect(
+                lambda s, start, end: self._on_depth_range_reset(s, start, end)
             )
             row.allDepthRangesCleared.connect(
                 lambda s: self._on_all_depth_ranges_cleared(s)
@@ -775,24 +786,23 @@ class OCMEntryWindow(QMainWindow):
         )
         self._refresh_one_sensor_row(sensor)
 
-    def _on_depth_range_deleted(self, sensor: str, index: int):
-        """index is positional within THIS sensor's filtered view of
-        depth_overrides, as built by _build_context_for_sensor's
-        existing_ranges list comprehension (same filter, same order:
-        iterate cast_entry.depth_overrides in list order, keep only
-        this sensor's entries). We must re-derive the REAL index into
-        the full, mixed-sensor depth_overrides list here, since that's
-        the actual list being mutated."""
+    def _on_depth_range_reset(self, sensor: str, start_depth: int, end_depth: int):
+        """PI chose "Reset to cast grade" for a completed drag (see
+        sensor_row_widget.py's depthRangeReset signal). Removes every
+        existing depth_overrides entry for this sensor that falls
+        ENTIRELY within [start_depth, end_depth] - a partial-overlap
+        override (one that extends beyond the reset range on either
+        side) is left in place rather than being split, matching this
+        project's existing "don't retroactively rewrite other ranges"
+        principle. A reset only ever targets exactly the range the PI
+        just dragged, nothing broader."""
         cast_entry = self._current_cast_entry()
         if cast_entry is None:
             return
-        this_sensor_indices = [
-            i for i, o in enumerate(cast_entry.depth_overrides) if o.sensor == sensor
+        cast_entry.depth_overrides = [
+            o for o in cast_entry.depth_overrides
+            if not (o.sensor == sensor and start_depth <= o.start_depth and o.end_depth <= end_depth)
         ]
-        if index >= len(this_sensor_indices):
-            return  # stale index (shouldn't normally happen - refresh() rebuilds after every change)
-        real_index = this_sensor_indices[index]
-        del cast_entry.depth_overrides[real_index]
         self._refresh_one_sensor_row(sensor)
 
     def _on_all_depth_ranges_cleared(self, sensor: str):

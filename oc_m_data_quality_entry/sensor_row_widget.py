@@ -1,9 +1,56 @@
 """
 sensor_row_widget.py
 OC_M Project Leader app — one sensor's full grading controls.
-Version: 2026.10.13_03
+Version: 2026.10.16_02
 
 ## ChangeLog
+
+## ChangeLog
+
+2026.10.16_02: Removed a dead leftover - _existing_depth_overrides was
+still being computed in refresh() but nothing reads it anymore (the
+overlap-warning dialog that used it was already removed from
+_on_range_selected prior to this entry). Also removed the now-unused
+depthRangeDeleted signal declaration (nothing emits it as of
+2026.10.16_01's list-to-summary replacement).
+
+2026.10.16_01: Replaced the per-range delete-list with a summary count
+("N depth ranges differ from the cast grade"), per plan from the
+2026.10.15 reset-button work. The old list's per-row delete button no
+longer has a clean conceptual home now that "Reset to cast grade" is
+the primary corrective action (delete-by-list-position doesn't compose
+well with a 5th picker option) - the summary count plus Reset/Clear-All
+covers the same real need (undo a mistaken depth grading) without
+needing to enumerate and index into individual override entries.
+_rebuild_ranges_list()/_range_row_widgets removed; _update_diff_summary()
+added.
+
+2026.10.15_01: Added "Reset to cast grade" as a picker option,
+alongside the existing worse-than-floor grade choices - first step of
+replacing the per-range delete-list UI with a summary-count readout
+(see 2026.10.16 entry below for that follow-on piece). New
+depthRangeReset(str, int, int) signal, reported via
+_GradePickerDialog.result_is_reset rather than chosen_quality_id, since
+a reset carries no quality_id. Removed the "nothing worse to grade"
+early-return dialog from _on_range_selected - Reset is always a
+meaningful option even when no worse grade exists (e.g. clearing a
+stale depth override left over from before the cast grade tightened),
+so there's no longer a dead-end case requiring an early bailout.
+
+2026.10.14_02: Two fixes from developer testing feedback, backfilled
+into this changelog (both were applied to the file without a version
+bump at the time - corrected here rather than left undocumented):
+  - Tightened the depth-grading floor from "equal-or-worse" to
+    "strictly worse": grading a depth range to the SAME value as the
+    sensor's current cast-level grade is redundant (looks like an
+    action was taken, but changes nothing resolved) and is now
+    excluded from the picker the same way better-than-floor options
+    already were. Changed severity comparison from `<` to `<=` in
+    _GradePickerDialog's button-building loop.
+  - Moved the per-range list's delete (\u2715) button from the far
+    right of each row (past addStretch()) to immediately after the
+    range/grade label, per developer request for better visual
+    association between a range and its delete control.
 
 2026.10.14_01: Added a grading floor for depth-range overrides, per
 developer request: a sensor's depth-range grade can never be BETTER
@@ -186,14 +233,12 @@ class SensorRowWidget(QWidget):
             shows has been accepted (or no overlap existed). The caller
             applies this to the submission and calls refresh() on every
             row whose resolved value could have changed.
-        depthRangeDeleted(str, int)
-            (sensor, index) - PI clicked the delete (\u2715) button next
-            to one entry in this row's depth-range list. index refers
-            to that entry's position within existing_depth_ranges as
-            most recently passed to refresh() - the caller is
-            responsible for removing the matching entry from the real
-            CastEntry.depth_overrides list (filtered to this sensor,
-            same order) and calling refresh() afterward.
+        depthRangeReset(str, int, int)
+            (sensor, start_depth, end_depth) - PI chose "Reset to cast
+            grade" instead of an explicit grade for a completed drag.
+            The caller removes/clears whatever depth-level override(s)
+            cover this range for this sensor, letting it fall back to
+            the cast/dump cascade.
         allDepthRangesCleared(str)
             (sensor) - PI clicked "Clear all ranges" for this sensor on
             the currently selected cast. The caller removes every
@@ -203,22 +248,24 @@ class SensorRowWidget(QWidget):
     dumpGradeChanged = pyqtSignal(str, object)
     castGradeChanged = pyqtSignal(str, object)
     depthRangeGraded = pyqtSignal(str, int, int, int)
-    depthRangeDeleted = pyqtSignal(str, int)
-    # (sensor, index) - index into THIS cast's depth_overrides list,
-    # filtered to this sensor in the same order existing_depth_ranges
-    # was built by the caller (see SensorRowContext.existing_depth_ranges
-    # - the caller filters CastEntry.depth_overrides by sensor without
-    # reordering, so index here is positionally meaningful back in
-    # entry_window.py, which does the actual deletion).
+    depthRangeReset = pyqtSignal(str, int, int)
+    # (sensor, start_depth, end_depth) - PI chose "Reset to cast grade"
+    # for a completed drag, instead of an explicit worse grade. Distinct
+    # from depthRangeGraded since there's no quality_id to carry - the
+    # caller is responsible for clearing whatever depth-level state
+    # covers this range for this sensor, so it falls back to the
+    # cast/dump cascade again.
     allDepthRangesCleared = pyqtSignal(str)
     # (sensor) - PI clicked "Clear all" for this sensor on this cast.
+    # NOTE: depthRangeDeleted was removed here (2026.10.16_02) - nothing
+    # emits it since the per-range delete buttons were replaced by the
+    # summary count in 2026.10.16_01.
 
     def __init__(self, sensor: str, parent=None):
         super().__init__(parent)
         self.sensor = sensor
         self._context: SensorRowContext | None = None
         self._expanded = False
-        self._existing_depth_overrides: list[tuple[int, int]] = []  # (start, end) pairs, for overlap checks
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -316,17 +363,14 @@ class SensorRowWidget(QWidget):
         self._strip.hoverDepthChanged.connect(self._on_hover_changed)
         depth_layout.addWidget(self._strip)
 
-        # List of this sensor's existing depth-range overrides on the
-        # current cast, one row per entry, each with its own delete
-        # button. Exists specifically so re-grading the same (or an
-        # overlapping) range doesn't silently pile up invisible dead
-        # entries - "last-applied wins" is still the resolution rule,
-        # but now the PI can SEE every entry contributing to that
-        # resolution and remove ones that are stale or mistaken.
-        self._ranges_list_layout = QVBoxLayout()
-        self._ranges_list_layout.setSpacing(1)
-        depth_layout.addLayout(self._ranges_list_layout)
-        self._range_row_widgets: list[QWidget] = []
+        # Summary readout of how many depths currently differ from this
+        # sensor's cast-level grade (2026.10.16 - replaces the old
+        # per-range delete-list; see refresh()/_rebuild_ranges_list for
+        # why a list no longer applies once ranges stop being discrete
+        # stored objects).
+        self._lbl_diff_summary = QLabel("")
+        self._lbl_diff_summary.setStyleSheet("color: #9ca3af; font-style: italic;")
+        depth_layout.addWidget(self._lbl_diff_summary)
 
         root.addWidget(self._depth_area)
         self._depth_area.setVisible(False)
@@ -373,10 +417,6 @@ class SensorRowWidget(QWidget):
         else:
             self._lbl_resolved.setText("")
 
-        self._existing_depth_overrides = [
-            (r.start_depth, r.end_depth) for r in context.existing_depth_ranges
-        ]
-
         count = context.depth_override_count
         if count > 0:
             label = "1 depth range" if count == 1 else f"{count} depth ranges"
@@ -387,7 +427,7 @@ class SensorRowWidget(QWidget):
             self._btn_depth_badge.setVisible(False)
             self._btn_clear_all.setVisible(False)
 
-        self._rebuild_ranges_list(context)
+        self._update_diff_summary(context)
 
         self._strip.set_data(context.depth_points)
         self._strip.set_thresholds(context.thresholds)
@@ -397,41 +437,25 @@ class SensorRowWidget(QWidget):
             self._set_expanded(False)
         self._btn_expand.setEnabled(has_cast)
 
-    def _rebuild_ranges_list(self, context: SensorRowContext) -> None:
-        """Rebuilds the per-range list under the strip from scratch on
-        every refresh() - simplest correct approach given how rarely
-        this changes (only when a range is added/deleted/cast changes)
-        and how few rows there ever are (depth overrides per sensor per
-        cast should be a small, human-reviewable number, not hundreds).
-        """
-        for w in self._range_row_widgets:
-            self._ranges_list_layout.removeWidget(w)
-            w.deleteLater()
-        self._range_row_widgets = []
-
-        for i, r in enumerate(context.existing_depth_ranges):
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(4)
-
-            grade_label = context.quality_lookup.label(r.quality_id)
-            color = QUALITY_COLORS.get(r.quality_id, DEFAULT_QUALITY_COLOR)
-
-            lbl = QLabel(f"{r.start_depth}m\u2013{r.end_depth}m: {grade_label}")
-            lbl.setStyleSheet(f"color: {color};")
-            row_layout.addWidget(lbl)
-
-            btn_del = QToolButton()
-            btn_del.setText("\u2715")
-            btn_del.setFixedWidth(20)
-            btn_del.clicked.connect(lambda checked=False, idx=i: self.depthRangeDeleted.emit(self.sensor, idx))
-            row_layout.addWidget(btn_del)
-
-            row_layout.addStretch()
-
-            self._ranges_list_layout.addWidget(row_widget)
-            self._range_row_widgets.append(row_widget)
+    def _update_diff_summary(self, context: SensorRowContext) -> None:
+        """Replaces the old per-range delete-list (2026.10.16). Under
+        the current (pre-flat-array) data model this still counts
+        DISTINCT override ENTRIES, not distinct depths - once the
+        underlying storage model changes to one resolved value per
+        depth (see project discussion on the preloader/PI-app shape
+        unification), this should be revisited to count actual
+        DEPTHS that differ from the cast-level grade, which is the
+        more honest version of this question and will be cheaper to
+        compute (a single pass comparing each depth_points entry's
+        resolved id against context.resolved_id, rather than reasoning
+        about override objects at all)."""
+        count = context.depth_override_count
+        if count == 0:
+            self._lbl_diff_summary.setText("")
+        elif count == 1:
+            self._lbl_diff_summary.setText("1 depth range differs from the cast grade.")
+        else:
+            self._lbl_diff_summary.setText(f"{count} depth ranges differ from the cast grade.")
 
     def _on_clear_all_clicked(self):
         if self._context is None:
@@ -496,63 +520,59 @@ class SensorRowWidget(QWidget):
         if self._context is None or not self._context.has_cast_selected:
             return
 
-        overlap = any(
-            not (end_depth < lo or start_depth > hi)
-            for lo, hi in self._existing_depth_overrides
-        )
-        if overlap:
-            reply = QMessageBox.question(
-                self,
-                "Overlapping depth range",
-                f"This range ({start_depth}m\u2013{end_depth}m) overlaps an "
-                f"existing graded range for {self.sensor} on this cast. "
-                "The new grade will take precedence wherever the ranges "
-                "overlap (last-applied wins).\n\nApply anyway?",
-                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if reply != QMessageBox.StandardButton.Ok:
-                return
+        # Overlap-warning dialog removed 2026.10.16: it existed to warn
+        # about range-vs-range ambiguity under the old "last-applied
+        # wins" override-list model. With "Reset to cast grade" now
+        # available as an explicit action and the per-range list gone
+        # (see 2026.10.16_01), re-grading a previously-graded depth is
+        # just as unambiguous as grading a fresh one - the new drag's
+        # result simply applies to that range, no warning needed.
 
         floor_quality_id = self._context.resolved_id
         lookup = self._context.quality_lookup
         floor_severity = lookup.severity(floor_quality_id)
         worst_severity = max(lookup.severity(qid) for qid in lookup.ids_sorted_by_severity())
-        if floor_severity >= worst_severity:
-            QMessageBox.information(
-                self, "Nothing worse to grade",
-                f"{self.sensor} is already graded {lookup.label(floor_quality_id)} "
-                "at the cast/dump level - there is no worse grade available "
-                "to assign to a depth range."
-            )
-            return
+        # Note: even when there's no WORSE grade available, "Reset to
+        # cast grade" can still be meaningful (clearing a stale
+        # depth-specific override from before the cast grade changed) -
+        # so this no longer early-returns; _GradePickerDialog always
+        # offers Reset regardless of whether any explicit worse option
+        # exists.
 
         picker = _GradePickerDialog(
             self.sensor, start_depth, end_depth,
             floor_quality_id, lookup, self
         )
         if picker.exec():
-            self.depthRangeGraded.emit(self.sensor, start_depth, end_depth, picker.chosen_quality_id)
+            if picker.result_is_reset:
+                self.depthRangeReset.emit(self.sensor, start_depth, end_depth)
+            else:
+                self.depthRangeGraded.emit(self.sensor, start_depth, end_depth, picker.chosen_quality_id)
 
 
 class _GradePickerDialog(QMessageBox):
-    """Minimal grade-choice prompt for a completed depth-range drag.
+    """Grade-choice prompt for a completed depth-range drag.
     Deliberately plain (QMessageBox-derived button row) rather than a
-    custom dialog - four buttons, no other content needed.
+    custom dialog.
 
-    floor_quality_id enforces the "depth grade cannot be BETTER than
-    the sensor's current cast-level resolved grade" rule (2026.10.14) -
-    any quality id with LOWER severity than the floor (i.e. numerically
-    less, since severity is 1=Good < 2=Unknown < 3=Questionable
-    4=Bad) is omitted from the button row entirely, not merely
-    disabled, so there's nothing to click that would violate the rule.
-    The floor itself is always the sensor's CURRENT cast-level resolved
-    grade (DumpEntry.resolved_cast_grade's output, threaded through via
-    SensorRowContext.resolved_id) - never relative to other existing
-    depth ranges, and never retroactively re-checked against ranges
-    created before the floor changed (see output_io.py/entry_window.py
-    changelog for the "don't retroactively rewrite" rationale, same
-    principle applied here)."""
+    floor_quality_id enforces the "depth grade cannot be BETTER THAN OR
+    EQUAL TO the sensor's current cast-level resolved grade" rule
+    (2026.10.14, tightened same day to exclude equal-to as redundant) -
+    any quality id with severity <= the floor's severity is omitted
+    from the button row entirely, not merely disabled, so there's
+    nothing to click that would violate the rule. The floor itself is
+    always the sensor's CURRENT cast-level resolved grade
+    (DumpEntry.resolved_cast_grade's output, threaded through via
+    SensorRowContext.resolved_id).
+
+    A "Reset to cast grade" button (2026.10.14) is always offered
+    alongside whatever explicit worse-grade options exist, EXCEPT when
+    there is nothing to reset FROM in a way that would differ from
+    offering an explicit grade - it is always safe to offer regardless
+    of whether this depth range currently has an override, since
+    resetting a range with no existing override is simply a no-op the
+    caller can shrug off. Reports back via result_is_reset instead of
+    chosen_quality_id when chosen."""
 
     def __init__(self, sensor: str, start_depth: int, end_depth: int,
                  floor_quality_id: int, quality_lookup, parent=None):
@@ -564,9 +584,12 @@ class _GradePickerDialog(QMessageBox):
             f"Grade {sensor} for depth {start_depth}m\u2013{end_depth}m:\n\n"
             f"(This sensor is currently graded {floor_label} at the cast/dump "
             f"level - grading a depth range to {floor_label} again would be "
-            f"redundant, so only grades WORSE than {floor_label} are offered.)"
+            f"redundant, so only grades WORSE than {floor_label} are offered. "
+            f"Choose \"Reset to cast grade\" to remove any depth-specific "
+            f"grading for this range.)"
         )
         self.chosen_quality_id: int | None = None
+        self.result_is_reset: bool = False
 
         self._buttons_by_id = {}
         for qid in quality_lookup.ids_sorted_by_severity():
@@ -574,11 +597,16 @@ class _GradePickerDialog(QMessageBox):
                 continue  # equal-to-or-better-than the floor - redundant, not offered
             btn = self.addButton(quality_lookup.label(qid), QMessageBox.ButtonRole.ActionRole)
             self._buttons_by_id[btn] = qid
+
+        self._reset_button = self.addButton("Reset to cast grade", QMessageBox.ButtonRole.ActionRole)
         self.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
 
     def exec(self) -> int:
         result = super().exec()
         clicked = self.clickedButton()
+        if clicked is self._reset_button:
+            self.result_is_reset = True
+            return 1
         if clicked in self._buttons_by_id:
             self.chosen_quality_id = self._buttons_by_id[clicked]
             return 1
