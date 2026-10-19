@@ -1,11 +1,45 @@
 """
 sensor_row_widget.py
 OC_M Project Leader app — one sensor's full grading controls.
-Version: 2026.10.16_02
+Version: 2026.10.19_01
 
 ## ChangeLog
 
-## ChangeLog
+2026.10.19_01: Cast-level grade buttons (G/U/Q/B) are now DISABLED, not
+just left clickable-then-corrected, whenever that grade is BETTER
+(less severe) than the sensor's current dump-level grade (via
+context.quality_lookup.severity() against context.dump_grade - falling
+back to good_id's own severity when no dump override exists, matching
+resolved_cast_grade()'s own "no dump override -> good_id" fallback).
+Prevents the PI from ever creating a Dump -> Cast hierarchy violation
+through normal use, matching the precedent already set by
+_GradePickerDialog's floor logic, which similarly omits (not merely
+disables, for THAT dialog's case) any button that would grade a depth
+range better than its cast. This is the PROACTIVE half of the fix; the
+DETECTIVE half (output_io.py's new validate_submission() hierarchy
+checks, same day) catches anything that slips in some other way (e.g.
+manual JSON edits), and a read-time clamp in resolved_cast_grade()
+neutralizes an illegal value's effect on the cascade regardless of how
+it got there - see output_io.py's 2026.10.19_01 changelog entry for
+both of those.
+
+2026.10.16_03: Flat-array migration, UI side.
+SensorDepthRange and SensorRowContext.existing_depth_ranges/depth_override_count
+are commented out (not deleted - left in place as a clearly-marked
+reference block in case we need to look back at the old shape; can be
+removed for real once the new behavior is confirmed working).
+Replaced by a single new field, SensorRowContext.
+depths_differing_from_cast: int, computed directly by the caller
+(entry_window.py) by comparing CastEntry.depth_quality_ids[sensor][i]
+against the cast-level resolved id - there is no longer a list of
+range objects for this widget to count. _update_diff_summary() and the
+depth-badge logic in refresh() now read this field instead of
+len(existing_depth_ranges). This file's _GradePickerDialog/
+_on_range_selected floor-and-reset logic is UNCHANGED - it never
+touched existing_depth_ranges directly, so nothing there needed to
+move (see the flat-array handoff doc's note that this widget never
+touches CastEntry directly; the actual array-writing happens in
+entry_window.py).
 
 2026.10.16_02: Removed a dead leftover - _existing_depth_overrides was
 still being computed in refresh() but nothing reads it anymore (the
@@ -159,31 +193,37 @@ from depth_strip_widget import (
 )
 
 
-@dataclass
-class SensorDepthRange:
-    """Plain (start_depth, end_depth, quality_id) for ONE existing
-    depth-range override of THIS sensor on the currently selected cast -
-    a direct, lossless mirror of output_io.DepthRangeOverride's own
-    start_depth/end_depth/quality_id fields (filtered to this sensor;
-    CastEntry.depth_overrides holds all sensors' ranges mixed together,
-    so the caller filters before building this context). Kept as a
-    separate, minimal type here rather than importing
-    DepthRangeOverride directly, so this widget module has no
-    dependency on output_io.py.
-
-    quality_id here is this override's OWN stored grade - NOT the
-    resolved/winning grade for these depths. If a later override
-    shadows this one (see DumpEntry.resolved_depth_grade's "last-
-    applied wins"), that shadowing is invisible at this field's level
-    by design: the per-range list is meant to show the PI exactly what
-    each entry actually says, including ones currently being shadowed,
-    so a duplicate/mistaken override can be identified and deleted
-    rather than silently indistinguishable from the one that's winning.
-    """
-    start_depth: int
-    end_depth: int
-    quality_id: int
-
+# COMMENTED OUT 2026.10.16_03 - superseded by the flat-array model.
+# SensorDepthRange mirrored output_io.DepthRangeOverride, which no
+# longer exists (output_io.py 2026.10.16_01). Left here, not deleted,
+# as a reference for what the old per-range shape looked like - remove
+# for real once the depths_differing_from_cast replacement is confirmed
+# working.
+#
+# @dataclass
+# class SensorDepthRange:
+#     """Plain (start_depth, end_depth, quality_id) for ONE existing
+#     depth-range override of THIS sensor on the currently selected cast -
+#     a direct, lossless mirror of output_io.DepthRangeOverride's own
+#     start_depth/end_depth/quality_id fields (filtered to this sensor;
+#     CastEntry.depth_overrides holds all sensors' ranges mixed together,
+#     so the caller filters before building this context). Kept as a
+#     separate, minimal type here rather than importing
+#     DepthRangeOverride directly, so this widget module has no
+#     dependency on output_io.py.
+#
+#     quality_id here is this override's OWN stored grade - NOT the
+#     resolved/winning grade for these depths. If a later override
+#     shadows this one (see DumpEntry.resolved_depth_grade's "last-
+#     applied wins"), that shadowing is invisible at this field's level
+#     by design: the per-range list is meant to show the PI exactly what
+#     each entry actually says, including ones currently being shadowed,
+#     so a duplicate/mistaken override can be identified and deleted
+#     rather than silently indistinguishable from the one that's winning.
+#     """
+#     start_depth: int
+#     end_depth: int
+#     quality_id: int
 
 @dataclass
 class SensorRowContext:
@@ -201,19 +241,37 @@ class SensorRowContext:
     resolved_id: int                # the cascade's resolved value for this cast
     resolved_tier: str              # "cast" | "dump" | "default"
     depth_points: list[ResolvedDepthPoint]  # already-resolved per-depth state, for the strip
-    existing_depth_ranges: list[SensorDepthRange]  # THIS sensor's real depth_overrides on this cast
+    # COMMENTED OUT 2026.10.16_03 - flat-array migration. Replaced by
+    # depths_differing_from_cast below. Left here as a reference for
+    # the old shape; remove for real once the replacement is confirmed
+    # working.
+    # existing_depth_ranges: list[SensorDepthRange]  # THIS sensor's real depth_overrides on this cast
+    depths_differing_from_cast: int
+    # Number of depths (not ranges) where THIS sensor's stored
+    # depth_quality_ids value differs from the cast-level resolved
+    # grade, on the currently selected cast. 0 when none, or when no
+    # cast is selected. Computed by the caller (entry_window.py) in
+    # _build_context_for_sensor(), since that's where both
+    # CastEntry.depth_quality_ids and the cast-level resolved id are
+    # already in hand - this widget has no way to compute it itself
+    # without reaching into CastEntry directly, which it deliberately
+    # never does (see this module's docstring, "Ownership model").
     thresholds: ThresholdBounds | None
     has_cast_selected: bool
 
-    @property
-    def depth_override_count(self) -> int:
-        """Number of depth-range overrides THIS sensor has on the
-        currently selected cast. 0 when none, or when no cast is
-        selected (existing_depth_ranges is always empty in that case).
-        Deliberately a derived property, not a separately-passed field -
-        it's always exactly len(existing_depth_ranges), so there is no
-        way for it to drift out of sync with the list it's counting."""
-        return len(self.existing_depth_ranges)
+    # COMMENTED OUT 2026.10.16_03 - flat-array migration. depth_
+    # override_count was always len(existing_depth_ranges); now that
+    # existing_depth_ranges is gone, depths_differing_from_cast is
+    # passed directly by the caller instead of being derived here.
+    # @property
+    # def depth_override_count(self) -> int:
+    #     """Number of depth-range overrides THIS sensor has on the
+    #     currently selected cast. 0 when none, or when no cast is
+    #     selected (existing_depth_ranges is always empty in that case).
+    #     Deliberately a derived property, not a separately-passed field -
+    #     it's always exactly len(existing_depth_ranges), so there is no
+    #     way for it to drift out of sync with the list it's counting."""
+    #     return len(self.existing_depth_ranges)
 
 
 class SensorRowWidget(QWidget):
@@ -398,8 +456,17 @@ class SensorRowWidget(QWidget):
             btn.blockSignals(False)
 
         has_cast = context.has_cast_selected
+        # Dump -> Cast hierarchy floor (2026.10.19): a cast can never be
+        # graded better than its dump. dump_floor_id is the sensor's
+        # current dump-level value, or good_id if no dump override is
+        # set (matching resolved_cast_grade()'s own fallback - with no
+        # dump override, EVERYTHING is legal, since good_id is the best
+        # possible grade and nothing can be better than it).
+        dump_floor_id = context.dump_grade if context.dump_grade is not None else context.quality_lookup.good_id
+        dump_floor_severity = context.quality_lookup.severity(dump_floor_id)
         for qid, btn in self._cast_buttons.items():
-            btn.setEnabled(has_cast)
+            legal = context.quality_lookup.severity(qid) >= dump_floor_severity
+            btn.setEnabled(has_cast and legal)
             btn.blockSignals(True)
             btn.setChecked(has_cast and context.cast_grade == qid)
             btn.setText(self._short_label(qid))
@@ -417,9 +484,9 @@ class SensorRowWidget(QWidget):
         else:
             self._lbl_resolved.setText("")
 
-        count = context.depth_override_count
+        count = context.depths_differing_from_cast
         if count > 0:
-            label = "1 depth range" if count == 1 else f"{count} depth ranges"
+            label = "1 depth" if count == 1 else f"{count} depths"
             self._btn_depth_badge.setText(label)
             self._btn_depth_badge.setVisible(True)
             self._btn_clear_all.setVisible(True)
@@ -438,24 +505,19 @@ class SensorRowWidget(QWidget):
         self._btn_expand.setEnabled(has_cast)
 
     def _update_diff_summary(self, context: SensorRowContext) -> None:
-        """Replaces the old per-range delete-list (2026.10.16). Under
-        the current (pre-flat-array) data model this still counts
-        DISTINCT override ENTRIES, not distinct depths - once the
-        underlying storage model changes to one resolved value per
-        depth (see project discussion on the preloader/PI-app shape
-        unification), this should be revisited to count actual
-        DEPTHS that differ from the cast-level grade, which is the
-        more honest version of this question and will be cheaper to
-        compute (a single pass comparing each depth_points entry's
-        resolved id against context.resolved_id, rather than reasoning
-        about override objects at all)."""
-        count = context.depth_override_count
+        """Updated 2026.10.16_03 for the flat-array model: counts actual
+        DEPTHS whose stored depth_quality_ids value differs from the
+        cast-level resolved grade, via context.depths_differing_from_cast
+        (computed by the caller - see SensorRowContext's field comment).
+        This replaces the old range-entry count, which is no longer a
+        meaningful concept under the flat-array model."""
+        count = context.depths_differing_from_cast
         if count == 0:
             self._lbl_diff_summary.setText("")
         elif count == 1:
-            self._lbl_diff_summary.setText("1 depth range differs from the cast grade.")
+            self._lbl_diff_summary.setText("1 depth differs from the cast grade.")
         else:
-            self._lbl_diff_summary.setText(f"{count} depth ranges differ from the cast grade.")
+            self._lbl_diff_summary.setText(f"{count} depths differ from the cast grade.")
 
     def _on_clear_all_clicked(self):
         if self._context is None:

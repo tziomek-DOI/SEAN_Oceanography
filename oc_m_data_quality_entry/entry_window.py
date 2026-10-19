@@ -1,20 +1,67 @@
 """
 entry_window.py
 OC_M Project Leader app — main window.
-Version: 2026.10.16_01
+Version: 2026.10.19_01
 
 ## ChangeLog
 
-2026.10.16_01: Removed the now-dead depthRangeDeleted connection and
-_on_depth_range_deleted() - sensor_row_widget.py no longer emits that
-signal (replaced by the summary-count readout, 2026.10.16). Added the
-missing depthRangeReset connection and _on_depth_range_reset(), which
-had been emitted since sensor_row_widget.py's "Reset to cast grade"
-feature but was never wired up here - clicking it did nothing until
-now. Removes only depth_overrides entries ENTIRELY contained within
-the reset range; partially-overlapping overrides are left untouched
-(no splitting), consistent with this project's existing
-don't-retroactively-rewrite principle.
+2026.10.19_01: Threads severity_by_id through to output_io.py's
+resolved_cast_grade()/resolved_depth_grade()/validate_submission(),
+which all gained that parameter today (see output_io.py's matching
+changelog entry for the hierarchy-clamp/validation rationale). Every
+call site already had self._quality_lookup in scope, so this is purely
+mechanical - one additional argument at 5 existing call sites, no new
+state, no new logic in this file.
+
+2026.10.16_04: Hierarchy-invariant enforcement + clobber warning.
+Establishes, as an invariant actively enforced on every grade change
+(not just checked once at entry), the rule: Dump -> Cast -> Depth, and
+nothing downstream may ever be a BETTER (less severe) grade than
+whatever is immediately upstream of it. Previously, a cast-level
+override always won over dump-level regardless of severity (a dump
+graded Bad could sit above a cast still explicitly marked Good, which
+is backwards under this invariant), and - separately - the flat-array
+depth_quality_ids array had no mechanism at all to react to a cast/dump
+grade change (a known gap found in PI testing this session: changing a
+cast's grade had zero effect on that cast's stored per-depth values).
+
+Both are now fixed by the same single rule, applied top-down wherever
+a dump or cast grade changes:
+  - Dump grade changes to X: for every cast in the dump, if that
+    cast's own sensor_cast_grades override is BETTER (less severe)
+    than X (via QualityLookup.severity()), it is overwritten to X.
+    Then, for every depth under that cast, if the stored
+    depth_quality_ids value is better than that cast's (possibly just-
+    updated) resolved value, it too is overwritten.
+  - Cast grade changes to X: for every depth under that cast, if the
+    stored depth_quality_ids value is better than X, it is overwritten
+    to X.
+Only depths/casts that are actually BETTER than the incoming grade are
+touched - anything already equal or worse is left exactly as-is, since
+the invariant is already satisfied for those.
+
+Clearing a grade (quality_id None) does NOT trigger the warning or any
+enforcement pass - confirmed by direct scenario analysis that clearing
+can only let the resolved value fall through to something at or above
+its current severity, never silently promote a downstream value to
+something better than what it was. A depth left stuck at a harsher
+grade after an upstream clear is stale but not a violation (nothing
+downstream is BETTER than upstream) - a known, accepted, non-bug state,
+not addressed further here.
+
+Before any SET (not clear) runs, a Yes/No warning dialog
+(_confirm_clobber()) lists every cast/depth that WILL be downgraded,
+with a scrollable detail list (QMessageBox.setDetailedText()). Choosing
+No, or closing the dialog, makes this a true no-op: the triggering
+grade button's own change is never applied either - not even a partial
+apply - so the PI cannot lose other, unrelated grading work in progress
+by backing out of this one decision. This matters in practice since the
+PI may grade extensively between manual Saves.
+
+Added _collect_clobbered_depths() (single cast, used by both the cast-
+level path and, per-cast, by the dump-level path),
+_collect_downgraded_casts_and_depths() (whole-dump scan, dump-level
+path only), and _confirm_clobber() (the shared warning dialog).
 
 2026.10.13_05: Cast list now shows "Cast xx - Station yy" instead of
 just "Cast xx", using the new CastEntry.station field (output_io.py
@@ -154,13 +201,17 @@ from PyQt6.QtWidgets import (
 from depth_strip_widget import QualityLookup, ResolvedDepthPoint, ThresholdBounds
 from output_io import (
     CastEntry,
-    DepthRangeOverride,
     DumpEntry,
     OCMSubmission,
     validate_submission,
 )
 from recent_files import RecentFiles
-from sensor_row_widget import SensorDepthRange, SensorRowContext, SensorRowWidget
+from sensor_row_widget import SensorRowContext, SensorRowWidget
+# NOTE (2026.10.16_02): DepthRangeOverride (output_io) and
+# SensorDepthRange (sensor_row_widget) are both gone/commented-out as
+# part of the flat-array migration - see each module's own changelog.
+# Neither is needed here anymore; depth-level grading now reads/writes
+# CastEntry.depth_quality_ids directly.
 from app_settings import AppSettings, STYLE_MODE_CUSTOM, STYLE_MODE_SHARED
 from version import CURRENT_VERSION
 
@@ -677,7 +728,7 @@ class OCMEntryWindow(QMainWindow):
                 resolved_id=self._quality_lookup.good_id,
                 resolved_tier="default",
                 depth_points=[],
-                existing_depth_ranges=[],
+                depths_differing_from_cast=0,
                 thresholds=ThresholdBounds.from_preload_payload(self._preload_payload, sensor),
                 has_cast_selected=False,
             )
@@ -685,7 +736,7 @@ class OCMEntryWindow(QMainWindow):
         dump_grade = dump_entry.sensor_dump_grades.get(sensor)
 
         cast_grade = None
-        existing_ranges: list[SensorDepthRange] = []
+        depths_differing = 0
         depth_points: list[ResolvedDepthPoint] = []
         resolved_id = self._quality_lookup.good_id
         resolved_tier = "default"
@@ -694,16 +745,16 @@ class OCMEntryWindow(QMainWindow):
             cast_entry = dump_entry.casts.get(self._current_cast)
             if cast_entry is not None:
                 cast_grade = cast_entry.sensor_cast_grades.get(sensor)
-                existing_ranges = [
-                    SensorDepthRange(
-                        start_depth=o.start_depth, end_depth=o.end_depth, quality_id=o.quality_id
-                    )
-                    for o in cast_entry.depth_overrides
-                    if o.sensor == sensor
-                ]
             resolved_id, resolved_tier = dump_entry.resolved_cast_grade(
-                sensor, self._current_cast, self._quality_lookup.good_id
+                sensor, self._current_cast, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
             )
+            if cast_entry is not None:
+                # Flat-array migration (2026.10.16_02): count depths
+                # whose stored depth_quality_ids value differs from the
+                # cast-level resolved id, rather than building a list of
+                # range objects (the deleted SensorDepthRange shape).
+                depth_ids = cast_entry.depth_quality_ids.get(sensor, [])
+                depths_differing = sum(1 for v in depth_ids if v != resolved_id)
             depth_points = self._build_depth_points(sensor, cast_entry)
 
         return SensorRowContext(
@@ -714,7 +765,7 @@ class OCMEntryWindow(QMainWindow):
             resolved_id=resolved_id,
             resolved_tier=resolved_tier,
             depth_points=depth_points,
-            existing_depth_ranges=existing_ranges,
+            depths_differing_from_cast=depths_differing,
             thresholds=ThresholdBounds.from_preload_payload(self._preload_payload, sensor),
             has_cast_selected=has_cast,
         )
@@ -740,7 +791,7 @@ class OCMEntryWindow(QMainWindow):
         for i, depth in enumerate(depths):
             reading = readings[i] if i < len(readings) else None
             quality_id, tier = dump_entry.resolved_depth_grade(
-                sensor, self._current_cast, depth, self._quality_lookup.good_id
+                sensor, self._current_cast, depth, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
             )
             points.append(ResolvedDepthPoint(
                 depth=depth, reading=reading, quality_id=quality_id, tier=tier
@@ -755,64 +806,267 @@ class OCMEntryWindow(QMainWindow):
         self._sensor_rows[sensor].refresh(self._build_context_for_sensor(sensor))
 
     # ------------------------------------------------------------------
+    def _collect_clobbered_depths(
+        self, cast_entry: CastEntry, sensor: str, new_cast_level_id: int, station: str | None, cast: str
+    ) -> list[tuple[str, str | None, int]]:
+        """Returns (cast, station, depth) tuples for every depth under
+        cast_entry whose stored depth_quality_ids[sensor] value is
+        BETTER (less severe) than new_cast_level_id - i.e. depths that
+        would violate the Dump -> Cast -> Depth "never better than
+        upstream" invariant if new_cast_level_id is applied as this
+        cast's resolved value, and so must be bumped up to match.
+        Depths already equal or worse are untouched and not listed -
+        the invariant is already satisfied for those. Added
+        2026.10.16_04 as part of invariant enforcement; shared by both
+        the single-cast path (_on_cast_grade_changed) and, per-cast, the
+        whole-dump path (_collect_downgraded_casts_and_depths)."""
+        depth_ids = cast_entry.depth_quality_ids.get(sensor, [])
+        new_severity = self._quality_lookup.severity(new_cast_level_id)
+        out = []
+        for i, depth in enumerate(cast_entry.depths):
+            if i < len(depth_ids) and self._quality_lookup.severity(depth_ids[i]) < new_severity:
+                out.append((cast, station, depth))
+        return out
+
+    def _collect_downgraded_casts_and_depths(
+        self, dump_entry: DumpEntry, sensor: str, new_dump_grade: int
+    ) -> tuple[list[str], list[tuple[str, str | None, int]]]:
+        """Dump-level scan for the same invariant: returns (cast_names,
+        depth_tuples) where cast_names lists every cast whose OWN
+        sensor_cast_grades override is better than new_dump_grade (and
+        would therefore be overwritten to new_dump_grade), and
+        depth_tuples lists every depth that would additionally need
+        bumping, evaluated against EACH cast's post-overwrite resolved
+        value (i.e. new_dump_grade for a cast being overwritten, or that
+        cast's own still-standing override if it was already equal/
+        worse and so is left alone). Added 2026.10.16_04."""
+        new_dump_severity = self._quality_lookup.severity(new_dump_grade)
+        downgraded_casts = []
+        depth_tuples = []
+        for cast, cast_entry in sorted(dump_entry.casts.items()):
+            existing_cast_grade = cast_entry.sensor_cast_grades.get(sensor)
+            if existing_cast_grade is not None and self._quality_lookup.severity(existing_cast_grade) < new_dump_severity:
+                downgraded_casts.append(cast)
+                effective_cast_level_id = new_dump_grade
+            else:
+                effective_cast_level_id = existing_cast_grade if existing_cast_grade is not None else new_dump_grade
+            depth_tuples.extend(
+                self._collect_clobbered_depths(
+                    cast_entry, sensor, effective_cast_level_id, cast_entry.station, cast
+                )
+            )
+        return downgraded_casts, depth_tuples
+
+    def _confirm_clobber(
+        self, downgraded_casts: list[str], affected_depths: list[tuple[str, str | None, int]]
+    ) -> bool:
+        """Shows a Yes/No warning listing every cast and/or depth that
+        WILL be downgraded to satisfy the Dump -> Cast -> Depth
+        invariant if the PI proceeds. Returns True iff the PI chose to
+        proceed; returns True with no dialog at all if nothing would
+        actually be affected. No/cancelled means a TRUE no-op - the
+        caller must not apply ANY part of the triggering grade change
+        (not even the dump/cast grade itself) if this returns False, so
+        the PI never loses other in-progress grading by backing out of
+        this one decision. Uses QMessageBox.setDetailedText() for the
+        scrollable list rather than a custom dialog. NOTE: the detail
+        list is currently behind a "Show Details..." disclosure button,
+        not shown inline by default - flagged by the developer as not
+        quite matching the originally-discussed "visible scrollable
+        list" intent; deferred to a future iteration rather than fixed
+        here."""
+        if not downgraded_casts and not affected_depths:
+            return True
+
+        lines = []
+        if downgraded_casts:
+            lines.append("Casts with their own grade that will be overwritten:")
+            for cast in downgraded_casts:
+                lines.append(f"    Cast {cast}")
+            lines.append("")
+
+        if affected_depths:
+            lines.append("Depths that will be overwritten:")
+            last_cast = None
+            for cast, station, depth in sorted(affected_depths):
+                if cast != last_cast:
+                    label = f"Cast {cast}" + (f" - Station {station}" if station else "")
+                    lines.append(label + ":")
+                    last_cast = cast
+                lines.append(f"    {depth}m")
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Lower-level grades will be overwritten")
+        box.setText(
+            f"{len(downgraded_casts)} cast(s) and {len(affected_depths)} depth(s) "
+            "currently have a grade that is BETTER than the one you are about to "
+            "set. A cast or depth can never be graded better than the level "
+            "above it, so proceeding will overwrite them to match.\n\n"
+            "No changes have been made yet. Proceed?"
+        )
+        box.setDetailedText("\n".join(lines))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
     def _on_dump_grade_changed(self, sensor: str, quality_id: int | None):
         dump_entry = self._current_dump_entry()
         if dump_entry is None:
             return
+
+        if quality_id is not None:
+            downgraded_casts, affected_depths = self._collect_downgraded_casts_and_depths(
+                dump_entry, sensor, quality_id
+            )
+            if not self._confirm_clobber(downgraded_casts, affected_depths):
+                return  # true no-op - nothing applied, including the dump grade itself
+
         if quality_id is None:
             dump_entry.sensor_dump_grades.pop(sensor, None)
         else:
             dump_entry.sensor_dump_grades[sensor] = quality_id
+            for cast, cast_entry in dump_entry.casts.items():
+                existing_cast_grade = cast_entry.sensor_cast_grades.get(sensor)
+                if existing_cast_grade is not None and self._quality_lookup.severity(existing_cast_grade) < self._quality_lookup.severity(quality_id):
+                    cast_entry.sensor_cast_grades[sensor] = quality_id
+
+        # Whether or not a cast-level override was just overwritten above,
+        # every cast's depth array must satisfy the invariant against its
+        # own (possibly-updated) resolved value.
+        for cast, cast_entry in dump_entry.casts.items():
+            resolved_id, _tier = dump_entry.resolved_cast_grade(
+                sensor, cast, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
+            )
+            depth_ids = cast_entry.depth_quality_ids.get(sensor)
+            if depth_ids is None:
+                cast_entry.depth_quality_ids[sensor] = [resolved_id] * len(cast_entry.depths)
+            else:
+                resolved_severity = self._quality_lookup.severity(resolved_id)
+                for i, v in enumerate(depth_ids):
+                    if self._quality_lookup.severity(v) < resolved_severity:
+                        depth_ids[i] = resolved_id
+
         self._refresh_one_sensor_row(sensor)
 
     def _on_cast_grade_changed(self, sensor: str, quality_id: int | None):
         cast_entry = self._current_cast_entry()
-        if cast_entry is None:
+        dump_entry = self._current_dump_entry()
+        if cast_entry is None or dump_entry is None:
             return
+
+        if quality_id is not None:
+            affected_depths = self._collect_clobbered_depths(
+                cast_entry, sensor, quality_id, cast_entry.station, self._current_cast
+            )
+            if not self._confirm_clobber([], affected_depths):
+                return  # true no-op - nothing applied, including the cast grade itself
+
         if quality_id is None:
             cast_entry.sensor_cast_grades.pop(sensor, None)
         else:
             cast_entry.sensor_cast_grades[sensor] = quality_id
+
+        resolved_id, _tier = dump_entry.resolved_cast_grade(
+            sensor, self._current_cast, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
+        )
+        depth_ids = cast_entry.depth_quality_ids.get(sensor)
+        if depth_ids is None:
+            cast_entry.depth_quality_ids[sensor] = [resolved_id] * len(cast_entry.depths)
+        else:
+            resolved_severity = self._quality_lookup.severity(resolved_id)
+            for i, v in enumerate(depth_ids):
+                if self._quality_lookup.severity(v) < resolved_severity:
+                    depth_ids[i] = resolved_id
+
         self._refresh_one_sensor_row(sensor)
 
     def _on_depth_range_graded(self, sensor: str, start_depth: int, end_depth: int, quality_id: int):
+        """Flat-array migration (2026.10.16_02): direct slot assignment
+        into cast_entry.depth_quality_ids[sensor] for every depth index
+        in [start_depth, end_depth], replacing the old append-a-
+        DepthRangeOverride behavior. Defensively initializes the
+        sensor's array to the sensor's CURRENT cast-level resolved value
+        (not a bare Good id - 2026.10.16_03 fix, matching the fallback
+        fill value already used by _on_depth_range_reset/_on_all_depth_
+        ranges_cleared below) if it isn't present yet - should not
+        happen given oc_m_preloader_service.py always populates it, but
+        handled per the handoff doc's note on tonight's track record of
+        missed edge cases."""
         cast_entry = self._current_cast_entry()
         if cast_entry is None:
             return
-        cast_entry.depth_overrides.append(
-            DepthRangeOverride(
-                sensor=sensor, start_depth=start_depth, end_depth=end_depth, quality_id=quality_id
+        dump_entry = self._current_dump_entry()
+        if dump_entry is None:
+            return
+        if sensor not in cast_entry.depth_quality_ids:
+            cast_level_id, _tier = dump_entry.resolved_cast_grade(
+                sensor, self._current_cast, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
             )
-        )
+            cast_entry.depth_quality_ids[sensor] = [cast_level_id] * len(cast_entry.depths)
+        depth_ids = cast_entry.depth_quality_ids[sensor]
+        for i in self._depth_index_range(cast_entry, start_depth, end_depth):
+            if i < len(depth_ids):
+                depth_ids[i] = quality_id
         self._refresh_one_sensor_row(sensor)
 
     def _on_depth_range_reset(self, sensor: str, start_depth: int, end_depth: int):
         """PI chose "Reset to cast grade" for a completed drag (see
-        sensor_row_widget.py's depthRangeReset signal). Removes every
-        existing depth_overrides entry for this sensor that falls
-        ENTIRELY within [start_depth, end_depth] - a partial-overlap
-        override (one that extends beyond the reset range on either
-        side) is left in place rather than being split, matching this
-        project's existing "don't retroactively rewrite other ranges"
-        principle. A reset only ever targets exactly the range the PI
-        just dragged, nothing broader."""
+        sensor_row_widget.py's depthRangeReset signal). Flat-array
+        migration (2026.10.16_02): under the old model this filtered out
+        depth_overrides entries; under the flat model there is nothing
+        to delete - "reset" means overwriting these slots with the
+        sensor's current cast-level resolved value (cast override, or
+        falling through to dump-level override, or Good), via
+        DumpEntry.resolved_cast_grade()'s first element."""
         cast_entry = self._current_cast_entry()
         if cast_entry is None:
             return
-        cast_entry.depth_overrides = [
-            o for o in cast_entry.depth_overrides
-            if not (o.sensor == sensor and start_depth <= o.start_depth and o.end_depth <= end_depth)
-        ]
+        dump_entry = self._current_dump_entry()
+        if dump_entry is None:
+            return
+        cast_level_id, _tier = dump_entry.resolved_cast_grade(
+            sensor, self._current_cast, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
+        )
+        if sensor not in cast_entry.depth_quality_ids:
+            cast_entry.depth_quality_ids[sensor] = [self._quality_lookup.good_id] * len(cast_entry.depths)
+        depth_ids = cast_entry.depth_quality_ids[sensor]
+        for i in self._depth_index_range(cast_entry, start_depth, end_depth):
+            if i < len(depth_ids):
+                depth_ids[i] = cast_level_id
         self._refresh_one_sensor_row(sensor)
 
     def _on_all_depth_ranges_cleared(self, sensor: str):
+        """Flat-array migration (2026.10.16_02): overwrites the ENTIRE
+        depth_quality_ids[sensor] array back to the cast-level resolved
+        value, for every index - not a filter, since there is no list of
+        override objects to filter under this model."""
         cast_entry = self._current_cast_entry()
         if cast_entry is None:
             return
-        cast_entry.depth_overrides = [
-            o for o in cast_entry.depth_overrides if o.sensor != sensor
-        ]
+        dump_entry = self._current_dump_entry()
+        if dump_entry is None:
+            return
+        cast_level_id, _tier = dump_entry.resolved_cast_grade(
+            sensor, self._current_cast, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
+        )
+        cast_entry.depth_quality_ids[sensor] = [cast_level_id] * len(cast_entry.depths)
         self._refresh_one_sensor_row(sensor)
+
+    @staticmethod
+    def _depth_index_range(cast_entry: CastEntry, start_depth: int, end_depth: int) -> list[int]:
+        """Returns the list of indices into cast_entry.depths (and,
+        parallel-indexed, cast_entry.depth_quality_ids[sensor]) whose
+        depth value falls within [start_depth, end_depth] inclusive.
+        Added 2026.10.16_02 (flat-array migration) to factor out the
+        depth-value-to-array-index lookup needed by
+        _on_depth_range_graded, _on_depth_range_reset, and
+        _on_all_depth_ranges_cleared (the latter uses the full range of
+        all depths), rather than repeating the same scan three times."""
+        return [
+            i for i, d in enumerate(cast_entry.depths)
+            if start_depth <= d <= end_depth
+        ]
 
     def _on_analyst_comments_changed(self):
         d = self._current_dump_entry()
@@ -823,7 +1077,7 @@ class OCMEntryWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _run_validation_and_report(self):
         self._last_problems = validate_submission(
-            self._submission, self._graded_sensors, self._quality_lookup.good_id
+            self._submission, self._graded_sensors, self._quality_lookup.good_id, self._quality_lookup.severity_by_id
         )
 
         if not self._last_problems:
