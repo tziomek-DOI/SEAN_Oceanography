@@ -1,59 +1,55 @@
 """
 output_io.py
 OC_M Project Leader app — output file I/O and validation.
-Version: 2026.10.19_01
+Version: 2026.10.19_02
 
 ## ChangeLog
 
-2026.10.19_01: Hierarchy backstop + validation. Enforces, as a read-time
-clamp inside resolved_cast_grade(), the invariant that a cast-level
-override can never resolve BETTER (less severe) than its dump-level
-value - if it would, the dump's own resolved value/tier is returned
-instead (the illegal stored value is not mutated/removed, only ignored
-by the cascade). resolved_depth_grade() forwards the same clamp
-transparently since it calls resolved_cast_grade() internally. Both
-functions gain one new parameter, severity_by_id: dict[int, int]
-(quality_id -> severity_order, lower = better - the same convention
-depth_strip_widget.QualityLookup already uses), following the existing
-pattern of good_id already being a plain caller-supplied value rather
-than looked up internally - this keeps the module's stated "no Qt
-dependency, reusable by the Data Manager's ingestion service" design
-intact, since a plain dict carries no Qt coupling.
+2026.10.19_02: Full-file structural parity fix. OCMSubmission was
+claimed, across several prior changelog entries (2026.10.13_01,
+2026.10.16_01), to share "one JSON structure" with the pre-loader's own
+output - that claim was only ever true for the PER-CAST shape
+(sensor_cast_grades/depth_quality_ids); it was never actually true for
+the file as a whole, and nobody verified the payload-level keys before
+writing that claim down. Confirmed via direct diff against a real
+pre-loader file and a real PI-saved file (both supplied by the
+developer) that to_json_payload() silently dropped SEVEN top-level
+keys the pre-loader emits (generated_date, start_year, end_year,
+data_quality_ids, thresholds, graded_sensors,
+defective_sensor_columns) plus one dump-level key (defective_sensors) -
+none of these were ever modeled on OCMSubmission/DumpEntry at all, so
+a PI save followed by a reopen would have silently and permanently
+lost all of them.
 
-This backstop addresses a real, confirmed gap found in PI testing: the
-UI's own button-disabling (sensor_row_widget.py) prevents a NEW illegal
-cast grade from being set via normal use, but does nothing about a
-value that is ALREADY illegal in a loaded file (e.g. a manually edited
-JSON, or a file from before this fix existed) - without the clamp, the
-UI would display a confidently-wrong resolved value ("resolved: Good
-(cast)") even though that value is invalid. The clamp makes the live
-session's own displayed/computed values always honest, independent of
-whatever the Data Manager's separate ingestion-side validation (not
-part of this module) ultimately decides to do with the file.
+Fixed by adding these as plain pass-through fields:
+  - OCMSubmission gains: extraction_date (renamed from the pre-
+    loader's "generated_date" on read - the PI app's own save-time
+    concept keeps its own name, saved_date, so the two timestamps
+    stay distinct: WHEN THE SNAPSHOT WAS QUERIED vs WHEN THE PI LAST
+    SAVED), start_year, end_year, data_quality_ids, thresholds,
+    graded_sensors, defective_sensor_columns.
+  - DumpEntry gains: defective_sensors (per-dump list of sensor names
+    the pre-loader's own NULL-column inference flagged - distinct
+    from the similarly-named top-level defective_sensor_columns,
+    which is the fixed 6-of-9 candidate list, not a per-dump result).
+  - "submitted_date" (the PI app's own save timestamp) is renamed to
+    saved_date for clarity, per explicit developer request, now that
+    it sits alongside extraction_date and the two names being
+    confusingly similar ("generated"/"submitted") was part of how this
+    went unnoticed for two sessions.
 
-Depth-level illegal values are NOT clamped the same way - see
-resolved_depth_grade()'s own docstring for why (no natural fallback
-value to clamp TO without discarding what's actually stored). They are
-surfaced via validate_submission() instead, not corrected at read time.
-This is a deliberate, known gap - flagged, not silently resolved.
+from_payload() reads generated_date (the pre-loader's actual on-disk
+key name, UNCHANGED there - this module does the renaming on read, not
+the pre-loader) into self.extraction_date. to_json_payload() always
+writes the NEW key names (extraction_date, saved_date) going forward -
+there is no need to preserve the old key names in files THIS module
+writes, per explicit developer instruction that backward compatibility
+with already-saved files is not a concern right now (all testing is
+against freshly-extracted pre-loader files).
 
-validate_submission() also gains two new hierarchy-violation checks,
-surfaced as new CastProblem entries in the same non-blocking list the
-existing missing_comment check already populates (confirmed: validation
-remains informational only, never blocks Save - reversed back to this
-after a brief detour into blocking, which risked the PI losing
-unsaved work over a validation error):
-  - dump_vs_cast: a cast's RAW sensor_cast_grades override is better
-    than its dump's RAW sensor_dump_grades value, for some sensor.
-  - cast_vs_depth: a cast's stored depth_quality_ids value is better
-    than that sensor's EFFECTIVE (already-clamped, via
-    resolved_cast_grade()) cast-level value - deliberately compared
-    against the clamped value, not the raw one, so a single illegal
-    cast override does not also cascade into a flood of redundant
-    depth-level false positives for every depth on that cast.
-  Summarized one problem per (cast, sensor) for cast_vs_depth (listing
-  an affected-depth COUNT, not every depth individually), matching this
-  file's existing one-problem-per-cast granularity for missing_comment.
+None of this changes the per-cast/per-dump GRADING shape, which was
+already correct - this is purely restoring the payload-level facts
+that were always supposed to round-trip and never did.
 
 2026.10.16_01: Single-shape unification. REPLACES CastEntry.
 depth_overrides (a list of DepthRangeOverride range-objects needing
@@ -63,15 +59,18 @@ depth, per sensor, parallel-indexed with depths/readings[sensor]
 exactly like a reading itself. sensor_cast_grades is also now ALWAYS
 fully populated (every graded sensor, every cast - no sparseness, no
 omission for "nothing graded"), matching oc_m_preloader_service.py's
-own output shape exactly. This removes the entire "two overlapping
-depth overrides for the same depth" bug class by construction (there
-is only ever one slot per depth, nothing to overlap) and eliminates
-the translation step that previously had to exist between what the
+own output shape exactly for the PER-CAST portion of the file (see
+2026.10.19_02 above for the payload-level portion this claim never
+actually covered). This removes the entire "two overlapping depth
+overrides for the same depth" bug class by construction (there is only
+ever one slot per depth, nothing to overlap) and eliminates the
+translation step that previously had to exist between what the
 preloader emitted (general_grades/depth_grades, raw per-row arrays)
 and what the PI app's save format expected (sparse sensor_cast_grades/
-depth_overrides) - both ends now read and write the identical shape.
-DepthRangeOverride is removed entirely. resolved_depth_grade() is now
-a direct array-index lookup instead of a reverse-order range scan.
+depth_overrides) - both ends now read and write the identical per-cast
+shape. DepthRangeOverride is removed entirely. resolved_depth_grade()
+is now a direct array-index lookup instead of a reverse-order range
+scan.
 
 2026.10.13_02: Added CastEntry.station (read-only, DB-sourced) -
 round-tripped through to_json_payload()/from_payload() the same way
@@ -130,7 +129,13 @@ not an addition alongside it - see oc_m_preloader_service.py's module
 docstring for the full rationale. The old CastEntry.quality_code/comment
 and DumpEntry.default_quality_code/default_comment/defective_sensors
 fields are gone; there is nothing left for them to do once every sensor
-has its own grade at three granularities (dump/cast/depth).
+has its own grade at three granularities (dump/cast/depth). NOTE
+(2026.10.19): DumpEntry.defective_sensors is RE-ADDED as of this
+session's fix, but with a DIFFERENT meaning than the old, removed
+field - the old one was a destructive NULL-out mechanism; the new one
+is a read-only, pass-through copy of the pre-loader's own inference
+result, never written to or acted on by this module, kept only so the
+PI's saved file doesn't silently lose that information.
 
 Defines the on-disk shape of the PI's saved OC_M submission (the single
 file now shared by the pre-loader's output and the PI's save/load - see
@@ -162,13 +167,16 @@ This module has no Qt dependency, so it can be unit tested and reused
 verbatim by the Data Manager's ingestion service later. NOTE for that
 future work (per handoff doc): the ingestion service should now expect
 to receive this same full structure (readings + all resolved grade
-values) per cast, not a sparse delta needing reconciliation against a
-separate snapshot - the two-file design's premise is gone. As of
-2026.10.19, severity_by_id (a plain dict, not a Qt-adjacent object) is
-also needed by several functions here - the ingestion service will need
-to supply its own copy of the same {quality_id: severity_order} mapping,
-sourced from the same OC.tbl_data_quality table this module has always
-assumed a caller-supplied good_id/graded_sensors would come from.
+values, PLUS the payload-level facts fixed in 2026.10.19_02) per cast,
+not a sparse delta needing reconciliation against a separate snapshot -
+the two-file design's premise is gone. As of 2026.10.19, severity_by_id
+(a plain dict, not a Qt-adjacent object) is also needed by several
+functions here - the ingestion service will need to supply its own copy
+of the same {quality_id: severity_order} mapping, sourced from the same
+OC.tbl_data_quality table this module has always assumed a
+caller-supplied good_id/graded_sensors would come from (now also
+directly available as OCMSubmission.data_quality_ids/graded_sensors
+after loading a file, per the 2026.10.19_02 fix).
 
 Comments remain UNCHANGED from the original per-cast design, per
 explicit developer instruction: the Project Leader confirmed the single
@@ -208,9 +216,8 @@ class CastEntry:
     # cast, no sparseness, no omission for "nothing graded" (that case
     # is simply every sensor mapping to the Good id, written explicitly,
     # same as everything else in this file post-unification). Matches
-    # oc_m_preloader_service.py's own output shape exactly - there is
-    # no longer a translation step between what the preloader emits and
-    # what the PI app loads/saves.
+    # oc_m_preloader_service.py's own output shape exactly for the
+    # per-cast portion - see 2026.10.19_02 for the payload-level portion.
     sensor_cast_grades: dict[str, int] = field(default_factory=dict)
     # Single-shape unification (2026.10.16): REPLACES depth_overrides
     # (a list of range objects needing overlap/last-applied-wins
@@ -237,6 +244,19 @@ class DumpEntry:
     # sensor. Sparse dict - absence means "falls through to Good".
     sensor_dump_grades: dict[str, int] = field(default_factory=dict)
     analyst_comments: str = ""          # free-text; NOT applied to the database
+    # Added 2026.10.19_02 (structural parity fix): read-only, pass-
+    # through copy of the pre-loader's own defective-sensor inference
+    # for this dump (see oc_m_preloader_service.py - a sensor whose
+    # reading column is NULL for every row in the dump). This module
+    # never writes to or acts on this field; it exists purely so the
+    # PI's saved file doesn't silently lose information the pre-loader
+    # already determined. NOT the same concept as the old, removed
+    # destructive-NULL-out defective_sensors field from before the
+    # 2026-10-08 redesign, and NOT the same as the top-level, fixed
+    # candidate list DEFECTIVE_SENSOR_COLUMNS/defective_sensor_columns -
+    # this is the per-dump RESULT of applying that inference, specific
+    # to this one dump.
+    defective_sensors: list[str] = field(default_factory=list)
     casts: dict[str, CastEntry] = field(default_factory=dict)  # cast -> CastEntry
 
     # ------------------------------------------------------------------
@@ -331,11 +351,11 @@ class DumpEntry:
                 if idx < len(depth_ids):
                     stored = depth_ids[idx]
                     if severity_by_id[stored] < severity_by_id[cast_level_id]:
-                        # Illegal: depth is better than its cast's resolved
-                        # value. Clamp - ignore the stored depth value,
-                        # fall through to the cast-level tier instead.
-                        # Symmetric with resolved_cast_grade()'s own
-                        # cast-vs-dump clamp above.
+                        # Illegal: depth is better than its cast's
+                        # resolved value. Clamp - ignore the stored
+                        # depth value, fall through to the cast-level
+                        # tier instead. Symmetric with resolved_cast_
+                        # grade()'s own cast-vs-dump clamp above.
                         return cast_level_id, cast_level_tier
                     if stored != cast_level_id:
                         return stored, "depth"
@@ -355,10 +375,31 @@ class OCMSubmission:
     pivot, this is the ONE in-memory model for both a fresh pre-loader-
     emitted file and a file the PI has already graded and saved - both
     are the same JSON shape, loaded via the same load() classmethod.
+
+    As of 2026.10.19_02, this class also holds the pre-loader's
+    PAYLOAD-LEVEL facts (extraction_date, start_year, end_year,
+    data_quality_ids, thresholds, graded_sensors,
+    defective_sensor_columns) as plain pass-through fields, plus its
+    own saved_date. These were never modeled here before despite
+    several changelog entries claiming "one JSON structure" for the
+    whole file - that claim was only ever true for the per-cast grading
+    shape. See this module's top-of-file changelog entry for the full
+    account of what was missing and why.
     """
 
     def __init__(self):
         self.cruise_years: dict[str, CruiseYearEntry] = {}
+        # Payload-level pass-through facts (2026.10.19_02). None of
+        # these are read or interpreted by this module beyond storing
+        # and round-tripping them - entry_window.py is the consumer.
+        self.extraction_date: str | None = None   # renamed on read from the pre-loader's "generated_date"
+        self.start_year: str | None = None
+        self.end_year: str | None = None
+        self.data_quality_ids: list[dict] = []
+        self.thresholds: list[dict] = []
+        self.graded_sensors: list[str] = []
+        self.defective_sensor_columns: list[str] = []
+        self.saved_date: str | None = None        # this app's own save timestamp (was "submitted_date")
 
     # ------------------------------------------------------------------
     def to_json_payload(self) -> dict:
@@ -367,6 +408,20 @@ class OCMSubmission:
         This is what allows a saved file to be reopened directly (by
         the PI, across multiple sittings, or by the Data Manager's
         future ingestion service) without re-running the pre-loader.
+
+        As of 2026.10.19_02, this also emits every payload-level fact
+        this instance was constructed with or loaded from
+        (extraction_date, start_year, end_year, data_quality_ids,
+        thresholds, graded_sensors, defective_sensor_columns) and the
+        PI app's own saved_date (this save's timestamp, freshly
+        generated every call - distinct from extraction_date, which is
+        carried through UNCHANGED from whenever the pre-loader actually
+        queried the database). Always writes the NEW key names
+        (extraction_date/saved_date); does not preserve the pre-
+        loader's old on-disk key name (generated_date) or this app's
+        old key name (submitted_date) - per explicit developer
+        instruction, backward compatibility with files saved before
+        this fix is not a concern.
 
         Unlike the old delta-based version, casts are NOT omitted when
         they have nothing graded - every cast's readings/depths must be
@@ -395,6 +450,7 @@ class OCMSubmission:
                     "start_date": d.start_date,
                     "sensor_dump_grades": dict(d.sensor_dump_grades),
                     "analyst_comments": d.analyst_comments,
+                    "defective_sensors": list(d.defective_sensors),
                     "casts": casts_out,
                 })
             cruise_years_out.append({
@@ -403,7 +459,14 @@ class OCMSubmission:
             })
 
         return {
-            "submitted_date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "extraction_date": self.extraction_date,
+            "saved_date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "start_year": self.start_year,
+            "end_year": self.end_year,
+            "data_quality_ids": self.data_quality_ids,
+            "thresholds": self.thresholds,
+            "graded_sensors": self.graded_sensors,
+            "defective_sensor_columns": self.defective_sensor_columns,
             "cruise_years": cruise_years_out,
         }
 
@@ -416,10 +479,19 @@ class OCMSubmission:
     def from_payload(cls, payload: dict) -> "OCMSubmission":
         """
         The ONE parse path (2026.10.13_01) - used identically whether
-        payload came from a fresh pre-loader-emitted file (every cast's
-        comment/sensor_cast_grades/depth_overrides empty) or a file the
-        PI already graded and saved. Both are the same JSON shape; there
-        is no separate "shell" concept or delta-replay step anymore.
+        payload came from a fresh pre-loader-emitted file or a file the
+        PI already graded and saved.
+
+        As of 2026.10.19_02, also reads every payload-level fact onto
+        the new instance (see OCMSubmission's own docstring).
+        extraction_date/saved_date are read directly under their
+        current names only - the old names (generated_date,
+        submitted_date) are no longer accepted anywhere, now that
+        oc_m_preloader_service.py emits extraction_date natively
+        (2026.10.19_01) and this app has never emitted anything but
+        saved_date. No backward-compatibility fallback is kept, per
+        explicit developer instruction - an old-format file will simply
+        get None for these two fields.
 
         Takes an already-parsed dict rather than a filepath, since
         main.py already loads the JSON into memory before OCMEntryWindow
@@ -430,6 +502,16 @@ class OCMSubmission:
         which only ever have a path from a QFileDialog).
         """
         sub = cls()
+
+        sub.extraction_date = payload.get("extraction_date")
+        sub.saved_date = payload.get("saved_date")
+        sub.start_year = payload.get("start_year")
+        sub.end_year = payload.get("end_year")
+        sub.data_quality_ids = payload.get("data_quality_ids", [])
+        sub.thresholds = payload.get("thresholds", [])
+        sub.graded_sensors = payload.get("graded_sensors", [])
+        sub.defective_sensor_columns = payload.get("defective_sensor_columns", [])
+
         for cy in payload.get("cruise_years", []):
             year = cy["cruise_year"]
             cy_entry = CruiseYearEntry(cruise_year=year)
@@ -440,6 +522,7 @@ class OCMSubmission:
                     start_date=d.get("start_date"),
                     sensor_dump_grades=dict(d.get("sensor_dump_grades", {})),
                     analyst_comments=d.get("analyst_comments", ""),
+                    defective_sensors=list(d.get("defective_sensors", [])),
                 )
                 for cast, c in d.get("casts", {}).items():
                     dump_entry.casts[cast] = CastEntry(
@@ -521,27 +604,6 @@ class CastProblem:
     detail: str
 
 
-# def _good_id_from_payload(preload_payload: dict) -> int:
-#     """The id whose data_quality_code is "0" (Good), read from the
-#     pre-loader JSON's data_quality_ids list (itself a live
-#     OC.tbl_data_quality query - see oc_m_preloader_service.py's
-#     _fetch_data_quality_table()). Raises ValueError if no such row is
-#     present - there is no safe assumed fallback for this.
-#
-#     Still used post-pivot: this reads data_quality_ids, which is a
-#     structural part of the shared JSON shape regardless of whether the
-#     file is a fresh pre-loader emission or the PI's own prior save (the
-#     PI app round-trips this key unchanged - it never alters the
-#     DB-sourced lookup table embedded in the file)."""
-#     for row in preload_payload.get("data_quality_ids", []):
-#         if row.get("code") == "0":
-#             return row["id"]
-#     raise ValueError(
-#         "No row with data_quality_code == '0' (Good) found in "
-#         "data_quality_ids - cannot determine the Good id."
-#     )
-
-
 def _cast_has_any_non_good_grade(
     dump_entry: DumpEntry, cast: str, graded_sensors: list[str], good_id: int,
     severity_by_id: dict[int, int]
@@ -583,15 +645,15 @@ def _hierarchy_problems_for_cast(
 ) -> list[tuple[str, str]]:
     """Returns (kind, detail) pairs for every Dump -> Cast -> Depth
     invariant violation found on this one cast, across all graded
-    sensors. Added 2026.10.19 alongside resolved_cast_grade()'s new
-    read-time clamp - this is the DETECTIVE counterpart: the clamp makes
-    an illegal stored value harmless at read time, but does not remove
-    or report it. This function exists to surface that something is
-    wrong in the stored data (most likely cause: a manually edited JSON
-    file, or a file predating this fix - normal use of the app can no
-    longer create one of these, since sensor_row_widget.py disables any
-    cast-level button that would violate the invariant against its
-    dump).
+    sensors. Added 2026.10.19 alongside resolved_cast_grade()'s/
+    resolved_depth_grade()'s new read-time clamps - this is the
+    DETECTIVE counterpart: the clamps make an illegal stored value
+    harmless at read time, but do not remove or report it. This
+    function exists to surface that something is wrong in the stored
+    data (most likely cause: a manually edited JSON file, or a file
+    predating this fix - normal use of the app can no longer create one
+    of these, since sensor_row_widget.py disables any cast-level button
+    that would violate the invariant against its dump).
 
     dump_vs_cast: compares the RAW stored cast-level override against
     the RAW stored dump-level value (not the clamped/resolved value),
@@ -654,7 +716,10 @@ def validate_submission(
     come from the same JSON payload the submission was loaded from -
     entry_window.py already holds that payload's graded_sensors/
     data_quality_ids in memory and passes these through rather than
-    this module hand-typing any of them.
+    this module hand-typing any of them. (As of 2026.10.19_02,
+    graded_sensors is also directly available as sub.graded_sensors,
+    now that OCMSubmission round-trips it - this function's signature
+    is unchanged for now, still taking it as an explicit argument.)
 
     Produces "missing_comment" problems (original rule, see the module
     comment above for why the original design's other two rules were

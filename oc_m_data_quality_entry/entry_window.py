@@ -1,9 +1,23 @@
 """
 entry_window.py
 OC_M Project Leader app — main window.
-Version: 2026.10.19_01
+Version: 2026.10.19_02
 
 ## ChangeLog
+
+2026.10.19_02: Reads graded_sensors/data_quality_ids/thresholds from
+self._submission (now populated correctly after output_io.py's
+2026.10.19_02 structural-parity fix) instead of only ever trusting the
+one-time preload_payload dict passed in at construction. This means a
+REOPENED file (not just a freshly pre-loader-emitted one) now correctly
+restores these facts from the file itself - previously, these were
+silently lost on save (see output_io.py's matching changelog) and a
+reopened file would have handed this window empty/missing versions of
+all three. self._preload_payload is retained only as a thin wrapper
+({"thresholds": self._submission.thresholds}) for
+ThresholdBounds.from_preload_payload()'s existing call signature, which
+expects a dict with a "thresholds" key rather than a bare list -
+depth_strip_widget.py was not touched as part of this fix.
 
 2026.10.19_01: Threads severity_by_id through to output_io.py's
 resolved_cast_grade()/resolved_depth_grade()/validate_submission(),
@@ -112,15 +126,14 @@ to chase the "no graphs showing" bug - that bug's root cause (two
 sources of cast data that could silently fall out of sync) no longer
 exists as a possible state, since there is only one source now.
 
-self._preload_payload is still stored and still used for genuinely
-payload-level (not per-cast) facts: building the QualityLookup, reading
-graded_sensors, and ThresholdBounds.from_preload_payload() per-sensor
-lookups (thresholds are a static per-sensor fact from tbl_threshold,
-not something that varies per cast or changes as the PI grades, so
-reading it straight from the payload here is correct and unrelated to
-the readings-desync bug this pivot fixes). It is explicitly NOT used
-for cast READINGS anymore - self._submission's CastEntry objects are
-now the only source for depths/readings, replacing the old
+self._preload_payload is still stored, now (2026.10.19_02) ONLY for
+ThresholdBounds.from_preload_payload()'s per-sensor lookups, reshaped
+as a thin {"thresholds": ...} wrapper around self._submission.
+thresholds - everything else that used to come from this dict
+(graded_sensors, data_quality_ids) now comes from self._submission
+directly, which correctly round-trips them across save/reopen. It is
+explicitly NOT used for cast READINGS - self._submission's CastEntry
+objects are the only source for depths/readings, replacing the old
 _find_cast_payload()/raw-dict lookup that caused the prior session's
 "no graphs showing" bug.
 
@@ -155,12 +168,9 @@ row's signal (only that row refreshes - a grade change on one sensor's
 dump/cast/depth override cannot affect another sensor's resolved value,
 since each sensor's cascade is entirely independent).
 
-QualityLookup and the graded-sensor list are built ONCE at window
-construction, from the pre-loader JSON payload (preload_payload[
-"graded_sensors"], preload_payload["data_quality_ids"]) - never
-hand-typed here. validate_submission() requires graded_sensors and
-good_id as explicit arguments; both are threaded through from the same
-source.
+QualityLookup is built ONCE at window construction. graded_sensors is
+now (2026.10.19_02) read from self._submission.graded_sensors rather
+than the raw preload_payload dict - see above.
 
 Layout: sized for a maximized 14-15" laptop at minimum (per developer
 confirmation - the PI is expected to run this maximized, same as the
@@ -262,21 +272,25 @@ class OCMEntryWindow(QMainWindow):
 
         self._default_output_dir = default_output_dir
 
-        # NOTE (2026.10.13_01): preload_payload is read ONCE here for
-        # the two payload-level facts that aren't per-cast (the quality
-        # lookup table and the graded-sensor list). It is deliberately
-        # NOT stored on self anymore - there is no per-cast code path
-        # that should ever reach back into a raw payload dict; cast data
-        # (readings/depths) now lives directly on each CastEntry inside
-        # self._submission. Keeping a stored self._preload_payload
-        # around was the root cause of the prior session's "no graphs
-        # showing" bug (see output_io.py's 2026.10.13_01 changelog) -
-        # don't reintroduce it.
-        self._quality_lookup = QualityLookup.from_preload_payload(preload_payload)
-        self._graded_sensors: list[str] = preload_payload.get("graded_sensors", [])
-        self._preload_payload = preload_payload  # still needed by ThresholdBounds.from_preload_payload() per-sensor lookups
-
         self._submission = OCMSubmission.from_payload(preload_payload)
+
+        # NOTE (2026.10.19_02): graded_sensors/data_quality_ids now come
+        # from self._submission, which correctly round-trips both across
+        # save/reopen as of output_io.py's structural-parity fix - no
+        # longer read from the raw preload_payload dict, which only ever
+        # reflected the file's state at THIS window's construction, not
+        # any reopened file's actual contents.
+        self._quality_lookup = QualityLookup.from_preload_payload({
+            "data_quality_ids": self._submission.data_quality_ids
+        })
+        self._graded_sensors: list[str] = self._submission.graded_sensors
+
+        # Retained ONLY as a thin wrapper for ThresholdBounds.
+        # from_preload_payload()'s existing call signature (expects a
+        # dict with a "thresholds" key, not a bare list) - the actual
+        # source of truth is self._submission.thresholds either way.
+        # depth_strip_widget.py was not touched as part of this fix.
+        self._preload_payload = {"thresholds": self._submission.thresholds}
 
         self._current_year: str | None = None
         self._current_dump: str | None = None
@@ -1139,6 +1153,19 @@ class OCMEntryWindow(QMainWindow):
 
         self._last_save_dir = os.path.dirname(filepath)
         self._submission = loaded
+
+        # NOTE (2026.10.19_02): re-derive these from the REOPENED
+        # submission, same as __init__ does - a reopened file now
+        # correctly carries its own graded_sensors/data_quality_ids/
+        # thresholds (post output_io.py fix), and this window must
+        # refresh its own cached copies to match, not keep whatever the
+        # window was originally constructed with.
+        self._quality_lookup = QualityLookup.from_preload_payload({
+            "data_quality_ids": self._submission.data_quality_ids
+        })
+        self._graded_sensors = self._submission.graded_sensors
+        self._preload_payload = {"thresholds": self._submission.thresholds}
+
         self._current_filepath = filepath
         self._current_filename = os.path.basename(filepath)
         self._lbl_open_file.setText(f"Open file: {self._current_filename}")
