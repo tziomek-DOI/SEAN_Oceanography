@@ -1,9 +1,110 @@
 """
 entry_window.py
 OC_M Project Leader app — main window.
-Version: 2026.10.22_03
+Version: 2026.10.23_04
 
 ## ChangeLog
+
+2026.10.23_04: Changed the appended delta's separator from a
+"\n---\n" visual divider to a single space. The divider made sense for
+the ORIGINAL full-text-append behavior (two independent, possibly-
+unrelated blocks of text), but now that the button appends a
+grammatically continuous trailing sentence (see 2026.10.23_01-03), a
+line-break divider read as two unrelated notes stapled together
+instead of one coherent comment. A space also avoids embedding
+newlines into a varchar(512) database field that may eventually be
+read by something (CSV export, report template) that doesn't expect
+them - not a hard SQL constraint, but a real downstream-consumer risk
+with no current visibility into every reader of this field.
+
+2026.10.23_03: Fixed _shared_sentence_run() testing the wrong end of
+the sentence list. 2026.10.23_02 searched for the longest TRAILING run
+of source's sentences in target, but shared/imported text is always a
+LEADING portion of source (the PI's new text is appended AFTER it, not
+before) - with exactly 2 source sentences this meant the method only
+ever tried "both sentences together" or "just the newest sentence
+alone," and never tested the shared first sentence by itself, so EVERY
+cast was reported as skipped even for the simple case (casts 96/97,
+identical single-sentence baseline). Changed the search to try
+progressively shorter LEADING runs (source_sentences[:end] for
+decreasing end) instead of trailing ones. Casts 98/99's case (their
+own sentence BEFORE the shared text) is unaffected by this fix and
+still relies on the "search anywhere in target" substring check added
+in 2026.10.23_02, which was correct all along.
+
+2026.10.23_02: Fixed "Copy to all casts in dump" still failing when a
+target cast had its OWN sentence BEFORE the text shared with the
+source cast (e.g. source = "Post cruise... out of specification. TZ:
+...", target = "CTD likely hit bottom. Post cruise... out of
+specification."). The 2026.10.23_01 fix only compared common PREFIXES,
+so it still couldn't see shared text that didn't start at position 0
+- reported by dev via exact repro: dump 0318 casts 98/99 both carry a
+"CTD likely hit bottom." sentence ahead of the shared imported text,
+and were incorrectly skipped.
+
+Replaced prefix comparison with _shared_sentence_run(): splits both
+texts into whole sentences (_split_sentences(), '. '/'! '/'? '
+terminators) and searches for the longest trailing run of the
+source's sentences that appears, verbatim and contiguous, ANYWHERE in
+the target's text - not required to start at position 0. Matching is
+always whole-sentence (never a partial fragment), so no separate
+boundary-snapping step is needed anymore. The computed delta (source's
+remainder past the matched run) is still always appended at the END of
+the target's existing text, regardless of where in the target the
+match was found, so any content a target cast already has AFTER the
+shared text is never disturbed or buried mid-string. Casts with no
+sentence-level overlap at all are still left untouched and named in
+the summary dialog, same as 2026.10.23_01.
+
+_common_prefix_at_boundary() (2026.10.23_01) is removed, superseded by
+_shared_sentence_run() + _split_sentences().
+
+2026.10.23_01: Fixed "Copy to all casts in dump" breaking when the
+source cast's comment had grown across multiple edits/sessions while
+other casts in the dump still only had the shorter original baseline
+- the 2026.10.22_03 snapshot-based delta (comment exactly as loaded
+today) no longer matched those other casts at all once the source
+cast diverged further, so EVERYTHING was reported as skipped even
+though the casts were clearly still related (reported by dev via
+exact repro: dump 0318, 5 casts, cast 95 edited across two sessions).
+
+Replaced snapshot-based comparison entirely with live-to-live common-
+prefix comparison: for each other cast, find the longest common
+prefix between that cast's CURRENT text and the source cast's CURRENT
+text (new _common_prefix_at_boundary(), snapped to a sentence/word
+boundary so a match never splits a word mid-character), and append
+only the source's remainder past that point. This self-corrects over
+time - after one click, casts share more history, so later clicks
+find longer common prefixes automatically - and requires no stored
+state, so self._cast_comment_snapshots and _snapshot_all_cast_
+comments() (introduced in 2026.10.22_03) are removed entirely as dead
+code.
+
+A cast with NO usable common prefix with the source (fully diverged
+text) is left untouched and named in the post-operation summary
+dialog, same reporting behavior as 2026.10.22_03's skip case.
+
+2026.10.22_03: Fixed duplicate-comment bug in "Copy to all casts in
+dump". Previously appended the source cast's ENTIRE current comment
+text to every other cast, which duplicated any baseline text the
+preloader had already written identically onto every cast in the
+dump (e.g. an imported pre-2026 comment present on every cast before
+any grading happened this session) - and would duplicate further on
+every re-click. Added self._cast_comment_snapshots, a dict of every
+cast's comment exactly as loaded, captured once per file load
+(_snapshot_all_cast_comments(), called from __init__ and
+_open_filepath()) and never touched again until the next load. The
+button now computes only the DELTA (text added since load) on the
+source cast, and appends just that delta to each other cast whose
+current comment still contains the source's snapshot text somewhere
+(substring match, not required to be a prefix, since a cast may have
+its own earlier note before the shared baseline). A cast whose
+comment does NOT contain the snapshot anywhere (e.g. PI rewrote/
+deleted the imported baseline on that one cast) is left untouched and
+named in a new summary dialog shown after the operation, rather than
+silently duplicated or silently skipped. This summary dialog also
+addresses a separately-reported complaint that the button previously
+gave no acknowledgment of what it did.
 
 2026.10.22_02: Fixed initial-open pane collapse. _fit_tree_width()
 previously measured ONLY item content (sizeHintForColumn), which
@@ -780,6 +881,52 @@ class OCMEntryWindow(QMainWindow):
         )
         self._btn_copy_comment_to_dump.setEnabled(any_non_good_dump_grade)
 
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        """Splits text into sentences on '. ', '! ', '? ', keeping the
+        terminator with each sentence. Used by _shared_sentence_run()
+        so matching only ever happens on WHOLE sentences - never a
+        partial word or a fragment of one (2026.10.23_02)."""
+        import re
+        parts = re.split(r'(?<=[.!?]) ', text.strip())
+        return [p for p in parts if p]
+
+    def _shared_sentence_run(self, source: str, target: str) -> str:
+        """Finds the LONGEST run of CONSECUTIVE LEADING sentences from
+        source (i.e. a run starting at source's sentence 0) that also
+        appears, verbatim and contiguous, SOMEWHERE in target - not
+        necessarily at the start of target (2026.10.23_03 - fixes
+        2026.10.23_02, which searched for TRAILING runs of source's
+        sentences. That's backward: shared/imported text is always
+        sentence(s) the PI's NEW text comes AFTER, so the shared run is
+        always a LEADING slice of source, and the new delta is always
+        whatever trails it - not the other way around. With exactly 2
+        source sentences, the trailing-run version only ever tried
+        "both sentences" or "just the newest sentence," and never
+        tested "just the shared first sentence" on its own, so it
+        missed the match entirely).
+
+        Returns the matched run (joined back into one string) or "" if
+        no sentence-level overlap exists at all. The CALLER is
+        responsible for treating everything in source AFTER this run as
+        the new delta to append - this method only identifies the
+        shared part; it does not care where in target that shared part
+        was found, since the caller always appends at the END of
+        target regardless (per explicit product decision - see
+        2026.10.23_02 changelog)."""
+        source_sentences = self._split_sentences(source)
+        target_text = target
+
+        # Try progressively shorter LEADING runs of source's sentences:
+        # all of them, then all but the last, etc., down to just the
+        # first sentence - we want the LONGEST shared run, so start
+        # from the longest possible and stop at the first hit.
+        for end in range(len(source_sentences), 0, -1):
+            candidate = " ".join(source_sentences[:end])
+            if candidate and candidate in target_text:
+                return candidate
+        return ""
+
     def _on_cast_comment_changed(self):
         cast_entry = self._current_cast_entry()
         if cast_entry is None:
@@ -788,30 +935,101 @@ class OCMEntryWindow(QMainWindow):
         cast_entry.cast_dirty = True
 
     def _on_copy_comment_to_dump_clicked(self):
-        """Appends the CURRENTLY DISPLAYED cast's comment text to every
-        OTHER cast's comment in the same dump, separated by a visual
-        divider - never overwrites an existing comment outright. The
-        source cast itself is left untouched."""
+        """Appends only the NEW tail of the CURRENTLY DISPLAYED cast's
+        comment to every OTHER cast's comment in the same dump.
+        (2026.10.23_01 - replaces the 2026.10.22_03 snapshot-based
+        approach, which broke when the source cast's own comment had
+        grown across multiple edits/sessions while other casts in the
+        dump still only had the original shorter baseline - the
+        snapshot no longer matched ANY of them, so everything was
+        reported as skipped even though the casts were clearly still
+        related.)
+
+        For each OTHER cast, finds the longest trailing run of WHOLE
+        SENTENCES from the source cast's CURRENT text that appears
+        anywhere in that cast's CURRENT text - not necessarily at the
+        start (2026.10.23_02 - a target cast may have its OWN sentence
+        BEFORE the shared text, e.g. "CTD likely hit bottom. <shared
+        sentence>", which plain prefix matching could never detect).
+        Only the source's remainder PAST that shared run is appended,
+        always at the END of the target's existing text regardless of
+        where in the target the shared run was found - never inserted
+        mid-string, so any unrelated trailing content on a target cast
+        is never disturbed or buried.
+
+        If no usable common prefix exists at all (the target cast's
+        text has diverged entirely, e.g. the PI deleted/rewrote the
+        imported baseline on that one cast), nothing is applied to that
+        cast - it's left untouched and named in the summary dialog so
+        the PI can review/apply it by hand rather than risk a silent
+        duplicate or a silent loss.
+
+        The source cast itself is never modified by this button.
+        """
         dump_entry = self._current_dump_entry()
         source_cast_entry = self._current_cast_entry()
-        if dump_entry is None or source_cast_entry is None:
+        if dump_entry is None or source_cast_entry is None or self._current_cast is None:
             return
 
-        source_text = (source_cast_entry.comment or "").strip()
-        if not source_text:
+        source_current = (source_cast_entry.comment or "").strip()
+        if not source_current:
             return
+
+        updated_casts = []
+        skipped_casts = []
+        any_delta_applied = False
 
         for cast, cast_entry in dump_entry.casts.items():
             if cast == self._current_cast:
                 continue
-            existing = (cast_entry.comment or "").strip()
-            if existing:
-                cast_entry.comment = f"{existing}\n---\n{source_text}"
+
+            target_current = (cast_entry.comment or "").strip()
+
+            common = self._shared_sentence_run(source_current, target_current)
+
+            if not common:
+                skipped_casts.append(cast)
+                continue
+
+            # The shared run is a TRAILING slice of source's sentences,
+            # so whatever comes after it in source is the delta. Using
+            # rfind (not a fixed index) because the shared run's exact
+            # character offset in source can shift slightly due to
+            # whitespace normalization during sentence splitting/join.
+            match_end = source_current.rfind(common) + len(common)
+            delta = source_current[match_end:].strip()
+            if not delta:
+                # Target is already fully up to date with the source -
+                # nothing to append, not an error, not a skip.
+                continue
+
+            any_delta_applied = True
+            if target_current:
+                cast_entry.comment = f"{target_current} {delta}"
             else:
-                cast_entry.comment = source_text
+                cast_entry.comment = delta
             cast_entry.cast_dirty = True
+            updated_casts.append(cast)
 
         self._refresh_cast_comment_box()
+
+        if not any_delta_applied and not skipped_casts:
+            QMessageBox.information(
+                self, "Nothing to copy",
+                "Every other cast in this dump already matches this "
+                "cast's comment - there is nothing new to copy."
+            )
+            return
+
+        summary_lines = [f"Updated {len(updated_casts)} cast(s) with the new comment text."]
+        if skipped_casts:
+            summary_lines.append("")
+            summary_lines.append(
+                "Skipped (no matching shared text found - review manually):"
+            )
+            summary_lines.extend(f"    Cast {c}" for c in sorted(skipped_casts))
+
+        QMessageBox.information(self, "Copy to all casts in dump", "\n".join(summary_lines))
 
     # ------------------------------------------------------------------
     def _current_dump_entry(self) -> DumpEntry | None:
