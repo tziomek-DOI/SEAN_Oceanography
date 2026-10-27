@@ -1,0 +1,24 @@
+/* ocm_styles.qss
+   Minimal custom stylesheet for the OC_M Project Leader app.
+   Only overrides what's needed - everything else uses Qt's default
+   (Windows dark mode) styling, since both the developer and PI found
+   the full dm_styles.qss sheet visually worse for this particular app.
+
+   Currently overrides:
+     - QTreeWidget/QTreeView selected-item contrast (default selection
+       color was too close to the unselected background to easily spot
+       at a glance).
+*/
+
+QTreeView::item:selected {
+    background-color: #3e5c2c;
+    color: #f5f5f0;
+}
+
+QTreeView::item:selected:!active {
+    /* Keeps the selection visible even when the tree doesn't have
+       keyboard focus (e.g. after clicking into the comment box) -
+       Qt's default often fades this to something barely visible. */
+    background-color: #2f4722;
+    color: #f5f5f0;
+}
