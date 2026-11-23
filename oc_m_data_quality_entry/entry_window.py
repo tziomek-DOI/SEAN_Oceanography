@@ -1,9 +1,19 @@
 """
 entry_window.py
 OC_M Project Leader app — main window.
-Version: 2026.10.23_04
+Version: 2026.11.23_01
 
 ## ChangeLog
+
+2026.11.23_01: The dump list and the cast list now respond to keyboard
+navigation (arrow keys, Home/End, PageUp/PageDown), not only to mouse
+clicks. Both lists were connected to itemClicked, which is mouse-only;
+they now use currentItemChanged. Signals are blocked while the lists
+are repopulated (_populate_tree, _load_dump_into_form) so nothing is
+loaded or refreshed twice. Cruise-year rows in the dump list are still
+ignored. The old handler names _on_tree_item_clicked and
+_on_cast_item_clicked were replaced by _on_dump_current_item_changed
+and _on_cast_current_item_changed.
 
 2026.10.23_04: Changed the appended delta's separator from a
 "\n---\n" visual divider to a single space. The divider made sense for
@@ -426,7 +436,7 @@ class OCMEntryWindow(QMainWindow):
         # --- Left: tree (cruise year / dump) ---
         self._dump_tree = QTreeWidget()
         self._dump_tree.setHeaderLabel("Cruise year / dump")
-        self._dump_tree.itemClicked.connect(self._on_tree_item_clicked)
+        self._dump_tree.currentItemChanged.connect(self._on_dump_current_item_changed)
         self._splitter.addWidget(self._dump_tree)
 
         # --- Middle: cast list for the selected dump ---
@@ -436,7 +446,7 @@ class OCMEntryWindow(QMainWindow):
         cast_layout.addWidget(self._lbl_casts_in_dump)
         self._cast_tree = QTreeWidget()
         self._cast_tree.setHeaderHidden(True)
-        self._cast_tree.itemClicked.connect(self._on_cast_item_clicked)
+        self._cast_tree.currentItemChanged.connect(self._on_cast_current_item_changed)
         cast_layout.addWidget(self._cast_tree)
         self._splitter.addWidget(cast_panel)
 
@@ -765,6 +775,7 @@ class OCMEntryWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _populate_tree(self):
+        self._dump_tree.blockSignals(True)  # the explicit load below does the work
         self._dump_tree.clear()
         first_dump_item = None
         for year in sorted(self._submission.cruise_years.keys(), reverse=True):
@@ -784,8 +795,10 @@ class OCMEntryWindow(QMainWindow):
             self._dump_tree.setCurrentItem(first_dump_item)
             year = first_dump_item.data(0, YEAR_ROLE)
             dump = first_dump_item.data(0, DUMP_ROLE)
+            self._dump_tree.blockSignals(False)
             self._load_dump_into_form(year, dump)
         else:
+            self._dump_tree.blockSignals(False)
             self._clear_form_to_empty_state()
             self._apply_splitter_sizes()
 
@@ -808,11 +821,18 @@ class OCMEntryWindow(QMainWindow):
         self._refresh_all_sensor_rows()
 
     # ------------------------------------------------------------------
-    def _on_tree_item_clicked(self, item: QTreeWidgetItem, _col: int):
-        dump = item.data(0, DUMP_ROLE)
-        year = item.data(0, YEAR_ROLE)
+    def _on_dump_current_item_changed(
+            self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None
+    ):
+        # Fires for mouse clicks AND keyboard navigation, unlike itemClicked.
+        if current is None:
+            return  # list was cleared
+        dump = current.data(0, DUMP_ROLE)
+        year = current.data(0, YEAR_ROLE)
         if dump is None:
-            return  # a cruise-year row was clicked, not a dump
+            return  # a cruise-year row is current, not a dump
+        if year == self._current_year and dump == self._current_dump:
+            return  # arrowed onto a year row and back: keep the cast selection
         self._load_dump_into_form(year, dump)
 
     def _load_dump_into_form(self, year: str, dump: str):
@@ -829,6 +849,7 @@ class OCMEntryWindow(QMainWindow):
         self._txt_analyst_comments.setPlainText(dump_entry.analyst_comments or "")
         self._txt_analyst_comments.blockSignals(False)
 
+        self._cast_tree.blockSignals(True)
         self._cast_tree.clear()
         first_cast_item = None
         for cast in sorted(dump_entry.casts.keys()):
@@ -845,13 +866,20 @@ class OCMEntryWindow(QMainWindow):
         if first_cast_item is not None:
             self._cast_tree.setCurrentItem(first_cast_item)
             self._current_cast = first_cast_item.data(0, Qt.ItemDataRole.UserRole)
+        self._cast_tree.blockSignals(False)
 
         self._refresh_cast_comment_box()
         self._refresh_all_sensor_rows()
         self._apply_splitter_sizes()
 
-    def _on_cast_item_clicked(self, item: QTreeWidgetItem, _col: int):
-        self._current_cast = item.data(0, Qt.ItemDataRole.UserRole)
+    def _on_cast_current_item_changed(
+            self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None
+    ):
+        # Fires for mouse clicks AND keyboard navigation (arrow keys, Home/End,
+        # PageUp/PageDown), unlike itemClicked, which is mouse-only.
+        if current is None:
+            return  # list was cleared
+        self._current_cast = current.data(0, Qt.ItemDataRole.UserRole)
         self._refresh_cast_comment_box()
         self._refresh_all_sensor_rows()
 
